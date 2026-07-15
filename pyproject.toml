@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "alive-netscan"
+version = "0.1.0"
+description = "Descoberta amigável de hosts vivos na rede WiFi (macOS + Linux)."
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+authors = [{ name = "Bernardo", email = "dev@bernardorodc.com" }]
+keywords = ["network", "scanner", "wifi", "discovery", "arp", "mdns", "bonjour"]
+classifiers = [
+    "Environment :: Console",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: System :: Networking :: Monitoring",
+]
+dependencies = [
+    "rich>=13.0",
+    "rich-argparse>=1.4",
+    "zeroconf>=0.100",
+    "mac-vendor-lookup>=0.1.12",
+]
+
+[project.urls]
+Homepage = "https://github.com/berodcdev/alive-netscan"
+Repository = "https://github.com/berodcdev/alive-netscan"
+
+[project.scripts]
+alive = "alive.cli:main"
+
+[tool.setuptools]
+packages = ["alive"]

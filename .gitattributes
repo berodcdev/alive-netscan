@@ -1,0 +1,8 @@
+# Normaliza finais de linha no repositório
+* text=auto eol=lf
+
+# Scripts sempre com LF
+*.sh text eol=lf
+
+# Arquivos binários (não fazer diff/normalização)
+*.gif binary

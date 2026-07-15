@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# mac-vendor-lookup cache
+mac_vendors.txt
+
+# macOS
+.DS_Store
+
+# Editores
+.idea/
+.vscode/
+*.swp
+
+# Contexto interno de desenvolvimento — NÃO publicar no GitHub
+CLAUDE.md
+.claude/
