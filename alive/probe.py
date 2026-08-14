@@ -236,6 +236,33 @@ def _header(text: str, name: str) -> Optional[str]:
     return m.group(1).strip() if m else None
 
 
+def new_ssdp_entry() -> dict:
+    """Registro vazio de um aparelho SSDP. Única fonte da verdade do formato."""
+    return {
+        "name": None,
+        "server": None,
+        "model": None,
+        "manufacturer": None,
+        "location": None,
+        "types": set(),
+    }
+
+
+def record_ssdp(results: dict[str, dict], ip: str, text: str) -> Optional[str]:
+    """Processa uma resposta SSDP e devolve a LOCATION anunciada, se houver."""
+    entry = results.setdefault(ip, new_ssdp_entry())
+    server = _header(text, "SERVER")
+    if server and not entry.get("server"):
+        entry["server"] = server
+    st = _header(text, "ST") or _header(text, "NT")
+    if st:
+        entry.setdefault("types", set()).add(st)
+    loc = _header(text, "LOCATION")
+    if loc and not entry.get("location"):
+        entry["location"] = loc
+    return loc
+
+
 def discover_ssdp(duration: float = 2.5, details: bool = True) -> dict[str, dict]:
     """Escuta respostas SSDP por ``duration`` segundos.
 
@@ -267,21 +294,9 @@ def discover_ssdp(duration: float = 2.5, details: bool = True) -> dict[str, dict
                 continue
             except OSError:
                 break
-            ip = addr[0]
-            text = data.decode("utf-8", "replace")
-            entry = results.setdefault(
-                ip, {"name": None, "server": None, "model": None, "types": set()}
-            )
-            server = _header(text, "SERVER")
-            if server and not entry["server"]:
-                entry["server"] = server
-            st = _header(text, "ST") or _header(text, "NT")
-            if st:
-                entry["types"].add(st)
-            loc = _header(text, "LOCATION")
+            loc = record_ssdp(results, addr[0], data.decode("utf-8", "replace"))
             if loc:
-                locations.setdefault(ip, loc)
-                entry["location"] = entry["location"] or loc
+                locations.setdefault(addr[0], loc)
     except OSError:
         return results
     finally:
@@ -307,17 +322,7 @@ def _fill_upnp_details(results: dict[str, dict], locations: dict[str, str]) -> N
                 xml = resp.read(65536).decode("utf-8", "replace")
         except Exception:  # noqa: BLE001 - aparelho pode não servir o XML
             return
-        entry = results.setdefault(
-            ip,
-            {
-                "name": None,
-                "server": None,
-                "model": None,
-                "manufacturer": None,
-                "location": None,
-                "types": set(),
-            },
-        )
+        entry = results.setdefault(ip, new_ssdp_entry())
         friendly = _tag(xml, "friendlyName")
         model = _tag(xml, "modelName")
         manufacturer = _tag(xml, "manufacturer")

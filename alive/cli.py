@@ -431,13 +431,36 @@ def _collect(
 
 
 def _staged(args, quiet: bool, label: str, fn):
-    """Roda uma etapa mostrando um spinner (ou silenciosa em JSON/watch)."""
+    """Roda uma etapa de enriquecimento com spinner e à prova de falha.
+
+    Nenhuma sonda é essencial: se uma quebrar (roteador exótico, rede estranha,
+    resposta malformada), o scan segue sem ela em vez de morrer. Com -v a
+    exceção sobe, para poder depurar.
+    """
+    error: Optional[Exception] = None
+
+    def guarded():
+        nonlocal error
+        try:
+            return fn()
+        except Exception as exc:  # noqa: BLE001 - etapa opcional nunca derruba o scan
+            if getattr(args, "verbose", False):
+                raise
+            error = exc
+            return {}
+
     if quiet:
-        return fn()
+        return guarded()
     with render.console.status(
         f"[green]{label}...[/green]", spinner="dots", spinner_style="green"
     ):
-        return fn()
+        result = guarded()
+    if error is not None:
+        render.warn(
+            f"etapa '{label}' falhou ({error.__class__.__name__}) — seguindo sem ela. "
+            "[dim]rode com -v para o traceback.[/dim]"
+        )
+    return result
 
 
 def _run_watch(
@@ -596,7 +619,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     except Exception as exc:  # noqa: BLE001 - UX: nunca vaza stack trace cru
         if getattr(args, "verbose", False):
             raise
-        render.error(str(exc) or exc.__class__.__name__)
+        # Sem o nome da classe, um KeyError vira só "'location'" na tela.
+        detail = str(exc)
+        render.error(
+            f"{exc.__class__.__name__}: {detail}" if detail else exc.__class__.__name__
+        )
         render.console.print("[dim]rode com -v para o traceback completo.[/dim]")
         return 1
 
