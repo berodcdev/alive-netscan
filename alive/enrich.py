@@ -123,13 +123,57 @@ MDNS_SERVICES = [
     "_ssh._tcp.local.",
     "_smb._tcp.local.",
     "_device-info._tcp.local.",
+    # iPhones/iPads anunciam companion-link mesmo com MAC aleatório: é uma das
+    # poucas formas de confirmar um aparelho Apple que se esconde.
+    "_companion-link._tcp.local.",
+    "_rdlink._tcp.local.",
 ]
+
+
+# Chaves de TXT que carregam o modelo do aparelho, por serviço:
+#   model  -> _device-info/_airplay ("MacBookAir10,1", "AppleTV6,2")
+#   md     -> _googlecast/_hap      ("Chromecast Ultra", "Nest Mini")
+#   ty/usb_MDL/product -> _ipp      ("HP DeskJet 2700 series")
+#   am     -> _raop/_airplay        (modelo do hardware Apple)
+_MODEL_KEYS = ("model", "md", "am", "ty", "usb_MDL", "product")
+
+# Prefixos de código de modelo da Apple -> nome legível.
+_APPLE_MODELS = (
+    ("MacBookAir", "MacBook Air"), ("MacBookPro", "MacBook Pro"),
+    ("MacBook", "MacBook"), ("Macmini", "Mac mini"), ("MacStudio", "Mac Studio"),
+    ("MacPro", "Mac Pro"), ("iMac", "iMac"), ("Mac", "Mac"),
+    ("iPhone", "iPhone"), ("iPad", "iPad"), ("Watch", "Apple Watch"),
+    ("AppleTV", "Apple TV"), ("AudioAccessory", "HomePod"),
+)
+
+
+def humanize_model(raw: Optional[str]) -> Optional[str]:
+    """'MacBookAir10,1' -> 'MacBook Air'. Outros modelos passam limpos."""
+    if not raw:
+        return None
+    s = raw.strip().strip("()")
+    for prefix, nice in _APPLE_MODELS:
+        if s.startswith(prefix) and (len(s) == len(prefix) or s[len(prefix)].isdigit()):
+            return nice
+    return s
+
+
+def _extract_model(props: dict) -> Optional[str]:
+    for key in _MODEL_KEYS:
+        val = props.get(key)
+        if val:
+            model = humanize_model(val)
+            # "AirPort" e afins não dizem nada; modelo tem que ser específico.
+            if model and model.lower() not in ("unknown", "generic"):
+                return model
+    return None
 
 
 def discover_mdns(duration: float = 3.0) -> dict[str, dict]:
     """Navega serviços mDNS por ``duration`` segundos.
 
-    Retorna {ip: {"name": str|None, "services": set[str]}}.
+    Retorna {ip: {"name": str|None, "services": set[str], "model": str|None,
+                  "props": dict}}.
     """
     try:
         from zeroconf import ServiceBrowser, ServiceListener, Zeroconf
@@ -147,10 +191,23 @@ def discover_mdns(duration: float = 3.0) -> dict[str, dict]:
 
     results: dict[str, dict] = {}
 
-    def _record(ip: str, name: Optional[str], service_type: str) -> None:
-        entry = results.setdefault(ip, {"name": None, "services": set()})
+    def _record(
+        ip: str,
+        name: Optional[str],
+        service_type: str,
+        props: Optional[dict] = None,
+    ) -> None:
+        entry = results.setdefault(
+            ip, {"name": None, "services": set(), "model": None, "props": {}}
+        )
         short = service_type.split(".")[0].lstrip("_")
         entry["services"].add(short)
+        if props:
+            entry["props"].update(props)
+            entry["model"] = entry["model"] or _extract_model(props)
+            # 'fn' (friendly name) do Chromecast é melhor que o nome da instância.
+            if props.get("fn") and not entry["name"]:
+                entry["name"] = props["fn"]
         if name:
             # Nome instância antes do tipo, ex.: "Sala de Estar._googlecast._tcp"
             friendly = name.split("." + service_type.split(".")[0])[0].rstrip(".")
@@ -178,10 +235,25 @@ def discover_mdns(duration: float = 3.0) -> dict[str, dict]:
                 return
             if not info:
                 return
+            # TXT records: onde mora o modelo real do aparelho.
+            props: dict[str, str] = {}
+            try:
+                for k, v in (info.properties or {}).items():
+                    key = k.decode("utf-8", "replace") if isinstance(k, bytes) else str(k)
+                    if isinstance(v, bytes):
+                        val = v.decode("utf-8", "replace")
+                    elif v is None:
+                        continue
+                    else:
+                        val = str(v)
+                    if val:
+                        props[key] = val
+            except Exception:  # noqa: BLE001 - TXT malformado não pode derrubar o scan
+                props = {}
             for addr in info.parsed_addresses():
                 if ":" in addr:  # ignora IPv6 por ora
                     continue
-                _record(addr, info.name, type_)
+                _record(addr, info.name, type_, props)
 
     zc = None
     try:

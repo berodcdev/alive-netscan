@@ -7,11 +7,13 @@ from typing import Optional
 
 from rich.box import SQUARE
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 from rich.text import Text
 
 from . import __author_email__, __version__
-from .net import NetInfo
+from .history import seen_label
+from .net import NetInfo, channel_from_freq
 
 # highlight=False: sem auto-coloração de números/strings — controlamos as cores no tema.
 console = Console(highlight=False)
@@ -41,18 +43,54 @@ def print_summary(
     hosts: list[dict],
     method: str,
     diff: Optional[object] = None,
+    findings: Optional[list] = None,
 ) -> None:
     """Imprime o resumo da rede em formato de saída de ferramenta de recon."""
     console.print()
     _kv("[*]", "green", "alvo", f"[bold green]{net.cidr or '?'}[/bold green]")
     _kv("[*]", "green", "interface", net.interface or "[dim]?[/dim]")
-    _kv("[*]", "green", "ssid", net.ssid or "[dim]desconhecida[/dim]")
-    _kv("[*]", "green", "gateway", net.gateway or "[dim]?[/dim]")
+
+    # Link: SSID + canal + sinal + taxa, o que estiver disponível.
+    link = getattr(net, "link", None) or {}
+    link_bits = []
+    channel = link.get("channel") or channel_from_freq(link.get("freq"))
+    if channel:
+        band = "5GHz" if 30 <= channel <= 180 else ("6GHz" if channel > 180 else "2.4GHz")
+        link_bits.append(f"canal {channel} [dim]({band})[/dim]")
+    if link.get("signal") is not None:
+        sig = link["signal"]
+        color = "bright_green" if sig > -60 else ("yellow" if sig > -72 else "red")
+        link_bits.append(f"[{color}]{sig} dBm[/{color}]")
+    if link.get("bitrate"):
+        link_bits.append(f"{link['bitrate']:.0f} Mb/s")
+    ssid = escape(net.ssid) if net.ssid else "[dim]desconhecida[/dim]"
+    _kv("[*]", "green", "ssid", " [dim]·[/dim] ".join([ssid, *link_bits]))
+
+    # Gateway com modelo, quando o UPnP contou.
+    wan = getattr(net, "wan", None) or {}
+    gw = net.gateway or "[dim]?[/dim]"
+    if wan.get("model"):
+        gw = f"{gw} [dim]· {escape(str(wan['model']))}[/dim]"
+    _kv("[*]", "green", "gateway", gw)
+
+    dns = getattr(net, "dns", None) or []
+    if dns:
+        _kv("[*]", "green", "dns", "[dim]" + ", ".join(dns) + "[/dim]")
+
+    if wan.get("external_ip"):
+        pub = f"[bold white]{wan['external_ip']}[/bold white]"
+        if wan.get("uptime_s"):
+            hrs = wan["uptime_s"] // 3600
+            up = f"{hrs // 24}d {hrs % 24}h" if hrs >= 24 else f"{hrs}h"
+            pub += f" [dim]· uplink {up}[/dim]"
+        _kv("[*]", "green", "publico", pub)
+
     _kv("[*]", "green", "metodo", f"[dim]{method}[/dim]")
-    _kv(
-        "[+]", "bright_green", "hosts vivos",
-        f"[bold bright_green]{len(hosts)}[/bold bright_green]",
-    )
+    silent = sum(1 for h in hosts if h.get("via") == "arp")
+    counted = f"[bold bright_green]{len(hosts)}[/bold bright_green]"
+    if silent:
+        counted += f" [dim]({silent} só via ARP — ignoram ping)[/dim]"
+    _kv("[+]", "bright_green", "hosts vivos", counted)
 
     # Contagem por tipo: dá a leitura da rede em uma linha.
     counts: dict[tuple[str, str], int] = {}
@@ -79,6 +117,18 @@ def print_summary(
             f"{g.get('name') or g.get('ip')}" for g in gone[:4]
         ) + (" ..." if len(gone) > 4 else "")
         _kv("[-]", "yellow", "sairam", f"[yellow]{len(gone)}[/yellow] [dim]{names}[/dim]")
+
+    if findings:
+        by_sev: dict[str, int] = {}
+        for f in findings:
+            by_sev[f.severity] = by_sev.get(f.severity, 0) + 1
+        colors = {"alto": "bright_red", "medio": "yellow", "baixo": "bright_black"}
+        parts = [
+            f"[{colors[sev]}]{by_sev[sev]} {sev}[/{colors[sev]}]"
+            for sev in ("alto", "medio", "baixo")
+            if by_sev.get(sev)
+        ]
+        _kv("[!]", "yellow", "achados", "[dim] · [/dim]".join(parts))
 
 
 _VENDOR_DROP = {
@@ -128,6 +178,53 @@ def clean_hostname(name: Optional[str]) -> Optional[str]:
     return ".".join(parts)
 
 
+def detail_text(host: dict) -> str:
+    """Coluna DETALHE: o dado mais específico que conseguimos sobre o aparelho.
+
+    Ordem de preferência: modelo anunciado pelo próprio aparelho (mDNS/UPnP) >
+    banner de servidor > família de SO pelo TTL. Alertas curtos vão no fim.
+    """
+    banners = host.get("banners") or {}
+    bits: list[str] = []
+
+    # Tudo aqui veio da rede (nome, banner, modelo): escapar antes de virar
+    # markup, senão um aparelho com "[" no nome quebra ou injeta estilo.
+    model = host.get("model")
+    if model:
+        bits.append(f"[white]{escape(model)}[/white]")
+
+    if not model:
+        for key in ("http_title", "http_server", "rtsp_server", "ssh"):
+            if banners.get(key):
+                bits.append(f"[white]{escape(str(banners[key]))}[/white]")
+                break
+    elif banners.get("ssh"):
+        bits.append(escape(str(banners["ssh"])))
+
+    # "Linux/Apple" é o TTL da maioria dos aparelhos — dizer isso não informa
+    # nada. Só vale mostrar a família de SO quando ela destoa.
+    if not bits and host.get("os_family") in ("Windows", "rede/embarcado"):
+        bits.append(f"[dim]{host['os_family']}[/dim]")
+    if host.get("via") == "arp":
+        bits.append("[dim]só ARP[/dim]")
+    for note in host.get("notes") or []:
+        bits.append(f"[bright_red]{note}[/bright_red]")
+
+    return " [dim]·[/dim] ".join(bits) if bits else "[dim]—[/dim]"
+
+
+def print_findings(items: list, limit: int = 8) -> None:
+    """Bloco '[!] achados' — o que a varredura viu e merece atenção."""
+    if not items:
+        return
+    console.print("[bold yellow][!] achados[/bold yellow]")
+    for f in items[:limit]:
+        console.print(f"  [{f.color}][!][/{f.color}] {escape(f.message)}")
+    if len(items) > limit:
+        console.print(f"  [dim]... e mais {len(items) - limit}[/dim]")
+    console.print()
+
+
 def render_table(hosts: list[dict], net: NetInfo) -> None:
     """Renderiza a tabela de dispositivos, adaptando as colunas à largura."""
     if not hosts:
@@ -137,10 +234,13 @@ def render_table(hosts: list[dict], net: NetInfo) -> None:
         )
         return
 
-    # Colunas secundárias somem em terminais estreitos para manter a leitura fácil.
+    # Colunas secundárias somem em terminais estreitos, na ordem inversa da
+    # importância: primeiro os serviços brutos, por último o essencial.
     width = console.size.width
-    show_mac = width >= 82
-    show_services = width >= 104
+    show_rtt = width >= 92
+    show_visto = width >= 104
+    show_mac = width >= 124
+    show_services = width >= 152
 
     table = Table(
         box=SQUARE,
@@ -156,6 +256,11 @@ def render_table(hosts: list[dict], net: NetInfo) -> None:
     if show_mac:
         table.add_column("MAC", no_wrap=True, style="dim")
     table.add_column("FABRICANTE", overflow="fold")
+    table.add_column("DETALHE", overflow="fold")
+    if show_rtt:
+        table.add_column("RTT", justify="right", no_wrap=True, style="dim")
+    if show_visto:
+        table.add_column("VISTO", no_wrap=True, style="dim")
     if show_services:
         table.add_column("SERVIÇOS", style="dim")
 
@@ -167,7 +272,8 @@ def render_table(hosts: list[dict], net: NetInfo) -> None:
         is_self = net.ip and h["ip"] == net.ip
         is_gw = net.gateway and h["ip"] == net.gateway
 
-        name = clean_hostname(h.get("name")) or "[dim]—[/dim]"
+        clean = clean_hostname(h.get("name"))
+        name = escape(clean) if clean else "[dim]—[/dim]"
         tag = ""
         if is_self:
             tag = " [dim green]« você[/dim green]"
@@ -184,12 +290,13 @@ def render_table(hosts: list[dict], net: NetInfo) -> None:
         type_cell = Text.from_markup(f"[{dev.color}]▪ {dev.label}[/{dev.color}]{mark}")
 
         vendor = clean_vendor(h.get("vendor"))
-        if not vendor:
-            if h.get("random_mac"):
-                vendor = "[dim italic]aleatório[/dim italic]"
-                any_random = True
-            else:
-                vendor = "[dim]?[/dim]"
+        if vendor:
+            vendor = escape(vendor)
+        elif h.get("random_mac"):
+            vendor = "[dim italic]aleatório[/dim italic]"
+            any_random = True
+        else:
+            vendor = "[dim]?[/dim]"
 
         row = [
             str(i),
@@ -200,8 +307,17 @@ def render_table(hosts: list[dict], net: NetInfo) -> None:
         if show_mac:
             row.append(h.get("mac") or "[dim]—[/dim]")
         row.append(Text.from_markup(vendor))
+        row.append(Text.from_markup(detail_text(h)))
+        if show_rtt:
+            rtt = h.get("rtt")
+            if rtt is None:
+                row.append("[dim]—[/dim]")
+            else:
+                row.append(f"{rtt:.1f}ms" if rtt < 10 else f"{rtt:.0f}ms")
+        if show_visto:
+            row.append(seen_label(h, first_run=bool(h.get("history_off"))))
         if show_services:
-            services = ", ".join(sorted(h.get("services") or [])) or "[dim]—[/dim]"
+            services = escape(", ".join(sorted(h.get("services") or []))) or "[dim]—[/dim]"
             row.append(services)
         table.add_row(*row)
 
@@ -221,7 +337,7 @@ def render_table(hosts: list[dict], net: NetInfo) -> None:
     )
 
 
-def to_json(hosts: list[dict], net: NetInfo) -> str:
+def to_json(hosts: list[dict], net: NetInfo, findings: Optional[list] = None) -> str:
     """Serializa o resultado em JSON."""
     payload = {
         "network": {
@@ -230,6 +346,9 @@ def to_json(hosts: list[dict], net: NetInfo) -> str:
             "local_ip": net.ip,
             "gateway": net.gateway,
             "cidr": net.cidr,
+            "link": getattr(net, "link", {}) or {},
+            "dns": getattr(net, "dns", []) or [],
+            "wan": getattr(net, "wan", {}) or {},
         },
         "hosts": [
             {
@@ -238,14 +357,27 @@ def to_json(hosts: list[dict], net: NetInfo) -> str:
                 "random_mac": bool(h.get("random_mac")),
                 "name": clean_hostname(h.get("name")),
                 "vendor": h.get("vendor"),
+                "model": h.get("model"),
                 "type": h["device"].label,
                 "type_inferred": bool(h.get("inferred")),
+                "os_family": h.get("os_family"),
+                "banners": h.get("banners") or {},
                 "services": sorted(h.get("services") or []),
+                "rtt_ms": h.get("rtt"),
+                "ttl": h.get("ttl"),
+                "discovered_via": h.get("via"),
                 "is_new": bool(h.get("is_new")),
+                "first_seen": h.get("first_seen"),
+                "seen_count": h.get("seen_count"),
+                "presence": h.get("presence"),
                 "is_gateway": bool(net.gateway and h["ip"] == net.gateway),
                 "is_self": bool(net.ip and h["ip"] == net.ip),
             }
             for h in hosts
+        ],
+        "findings": [
+            {"severity": f.severity, "ip": f.ip, "message": f.message}
+            for f in (findings or [])
         ],
     }
     return json.dumps(payload, ensure_ascii=False, indent=2)
@@ -255,13 +387,13 @@ def print_events(hosts: list[dict], diff: Optional[object]) -> None:
     """Linhas de entrada/saída de dispositivos (usado pelo --watch)."""
     for h in hosts:
         if h.get("is_new"):
-            name = clean_hostname(h.get("name")) or h["ip"]
+            name = escape(clean_hostname(h.get("name")) or h["ip"])
             console.print(
                 f"[bold bright_green][+][/bold bright_green] entrou: "
                 f"[bold]{name}[/bold] [dim]{h['ip']} · {h['device'].label}[/dim]"
             )
     for g in getattr(diff, "gone", []) or []:
-        name = g.get("name") or g.get("ip")
+        name = escape(str(g.get("name") or g.get("ip")))
         console.print(
             f"[yellow][-][/yellow] saiu: [bold]{name}[/bold] [dim]{g.get('ip')}[/dim]"
         )

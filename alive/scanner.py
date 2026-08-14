@@ -68,7 +68,8 @@ def _ping_cmd(ip: str, timeout: float) -> list[str]:
     return ["ping", "-c", "1", "-w", str(max(1, int(round(timeout)))), ip]
 
 
-def _ping_one(ip: str, timeout: float) -> Optional[str]:
+def _ping_one(ip: str, timeout: float) -> Optional[dict]:
+    """Pinga um host. Devolve {rtt, ttl} — dados que a resposta já carrega."""
     try:
         res = subprocess.run(
             _ping_cmd(ip, timeout),
@@ -77,9 +78,22 @@ def _ping_one(ip: str, timeout: float) -> Optional[str]:
             timeout=timeout + 1.5,
             check=False,
         )
-        return ip if res.returncode == 0 else None
+        if res.returncode != 0:
+            return None
     except (OSError, subprocess.SubprocessError):
         return None
+
+    out = res.stdout or ""
+    info: dict = {}
+    m = re.search(r"time[=<]([\d.]+)\s*ms", out)
+    if m:
+        info["rtt"] = float(m.group(1))
+    # O TTL de volta revela a família do SO (64 unix/android, 128 windows,
+    # 255 equipamento de rede) — vem de graça no mesmo pacote.
+    m = re.search(r"\bttl[=\s](\d+)", out, re.IGNORECASE)
+    if m:
+        info["ttl"] = int(m.group(1))
+    return info
 
 
 def ping_sweep(
@@ -87,19 +101,33 @@ def ping_sweep(
     timeout: float = 1.0,
     workers: int = 64,
     progress: Optional[Callable[[], None]] = None,
-) -> set[str]:
-    """Pinga todos os hosts da subrede em paralelo. Retorna IPs que responderam."""
+) -> dict[str, dict]:
+    """Pinga todos os hosts da subrede em paralelo. Retorna {ip: {rtt, ttl}}."""
     hosts = [str(h) for h in network.hosts()]
-    alive: set[str] = set()
+    alive: dict[str, dict] = {}
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
         futures = {pool.submit(_ping_one, ip, timeout): ip for ip in hosts}
         for fut in as_completed(futures):
             res = fut.result()
-            if res:
-                alive.add(res)
+            if res is not None:
+                alive[futures[fut]] = res
             if progress:
                 progress()
     return alive
+
+
+def os_family_from_ttl(ttl: Optional[int]) -> Optional[str]:
+    """Família de SO a partir do TTL de retorno (heurística clássica)."""
+    if not ttl:
+        return None
+    # O TTL decresce 1 por salto; na LAN há 0 ou 1 salto até o host.
+    if ttl > 200:
+        return "rede/embarcado"  # 255: roteador, impressora, switch
+    if ttl > 100:
+        return "Windows"  # 128
+    if ttl > 30:
+        return "Linux/Apple"  # 64
+    return None
 
 
 # --------------------------------------------------------------------------- #
@@ -176,33 +204,55 @@ def scan(
     local_ip: Optional[str] = None,
     gateway: Optional[str] = None,
 ) -> list[dict]:
-    """Descobre hosts vivos e associa MACs. Retorna lista de {ip, mac}.
+    """Descobre hosts vivos e associa MACs. Retorna lista de {ip, mac, rtt, ttl, via}.
 
     Estratégia híbrida: usa nmap quando disponível e habilitado; sempre
     complementa com ping sweep + tabela ARP para máxima cobertura.
     """
-    alive: set[str] = set()
+    alive: dict[str, str] = {}  # ip -> como foi descoberto
     macs: dict[str, str] = {}
+    stats: dict[str, dict] = {}
 
     if use_nmap and has_nmap():
         n_alive, n_macs = nmap_scan(str(network))
-        alive |= n_alive
+        for ip in n_alive:
+            alive[ip] = "nmap"
         macs.update(n_macs)
 
     # Ping sweep sempre roda (rápido, popula ARP, cobre hosts que o nmap perdeu).
-    alive |= ping_sweep(network, timeout=timeout, workers=workers, progress=progress)
+    pinged = ping_sweep(network, timeout=timeout, workers=workers, progress=progress)
+    for ip, info in pinged.items():
+        alive[ip] = "ping"
+        stats[ip] = info
 
     # Garantir gateway e host local na lista.
     for extra in (local_ip, gateway):
         if extra and ipaddress.ip_address(extra) in network:
-            alive.add(extra)
+            alive.setdefault(extra, "local")
 
-    # Enriquecer MACs a partir da tabela ARP (não sobrescreve MACs do nmap).
+    # A tabela ARP é fonte de hosts, não só de MACs: o ping sweep dispara um ARP
+    # request para cada IP, então quem responde ARP mas ignora ICMP (Windows com
+    # firewall, IoT, impressora) fica registrado aqui — e estaria invisível.
     arp = read_arp_table()
     for ip, mac in arp.items():
-        if ip in alive:
-            macs.setdefault(ip, mac)
+        try:
+            in_net = ipaddress.ip_address(ip) in network
+        except ValueError:
+            continue
+        if not in_net:
+            continue
+        macs.setdefault(ip, mac)
+        alive.setdefault(ip, "arp")
 
-    hosts = [{"ip": ip, "mac": macs.get(ip)} for ip in alive]
+    hosts = [
+        {
+            "ip": ip,
+            "mac": macs.get(ip),
+            "rtt": stats.get(ip, {}).get("rtt"),
+            "ttl": stats.get(ip, {}).get("ttl"),
+            "via": via,
+        }
+        for ip, via in alive.items()
+    ]
     hosts.sort(key=lambda h: ipaddress.ip_address(h["ip"]))
     return hosts

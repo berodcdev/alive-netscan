@@ -22,7 +22,10 @@ contrário, faz um *ping sweep* paralelo combinado com a tabela ARP. Nome e tipo
 cinco sinais independentes — DNS reverso, mDNS/Bonjour, NetBIOS, SSDP/UPnP e fingerprint
 por portas TCP — mais a base de fabricantes OUI (offline).
 
-Com `--watch`, fica monitorando e avisa **quem entra e quem sai** da rede.
+Com `--watch`, fica monitorando e avisa **quem entra e quem sai** da rede. E ao final de cada
+varredura lista os **achados**: serviço em texto puro exposto, câmera com RTSP aberto, ADB
+acessível, MAC duplicado e — via UPnP — os **redirecionamentos de porta ativos no seu
+roteador**, ou seja, o que está aberto para a internet.
 
 ---
 
@@ -78,12 +81,14 @@ Cada sonda pode ser desligada: `--no-nmap`, `--no-mdns`, `--no-vendor`, `--no-po
 
 | Etapa | O que faz |
 |-------|-----------|
-| **Rede** | detecta interface, IP, subrede (CIDR), gateway e SSID por SO (avisa se a rota padrão sai por VPN) |
-| **Scan** | `nmap -sn` (se houver) + ping sweep paralelo; MACs via tabela ARP |
+| **Rede** | interface, IP, subrede, gateway, SSID, canal/sinal do WiFi e DNS em uso (avisa se a rota padrão sai por VPN) |
+| **Scan** | `nmap -sn` (se houver) + ping sweep paralelo, guardando RTT e TTL; **toda entrada ARP completa conta como host vivo** — é assim que aparecem os aparelhos que ignoram ping |
 | **Nomes** | DNS reverso, mDNS/Bonjour, NetBIOS (Windows/Samba) e `friendlyName` do UPnP |
-| **Fingerprint** | fabricante por OUI (offline) + ~20 portas TCP que identificam o aparelho |
-| **Classificação** | combina fabricante, serviços, portas, UPnP e hostname — marca `?` quando é palpite |
-| **Histórico** | compara com o scan anterior da mesma subrede e marca quem é `NOVO` |
+| **Modelo** | TXT do mDNS (`MacBook Air`, `Chromecast Ultra`, modelo da impressora), banner de SSH/HTTP/RTSP e família de SO pelo TTL |
+| **Fingerprint** | fabricante por OUI (offline) + ~22 portas TCP que identificam o aparelho |
+| **Classificação** | combina modelo, fabricante, serviços, portas, UPnP e hostname — marca `?` quando é palpite |
+| **Histórico** | compara com o scan anterior: marca quem é `NOVO`, quem saiu e há quanto tempo cada um é conhecido |
+| **Achados** | serviços expostos, MAC duplicado e os redirecionamentos de porta ativos no roteador |
 
 Sem `nmap` ou sem `sudo`, o `alive` ainda funciona — apenas pode não ver aparelhos que
 ignoram ping. Instalar `nmap` e/ou rodar com `sudo` melhora a cobertura de MACs.

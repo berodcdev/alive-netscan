@@ -57,6 +57,15 @@ def _has(services: set[str], *names: str) -> bool:
     return any(n in services for n in names)
 
 
+# Software de servidor web embarcado -> o aparelho que costuma rodá-lo.
+_BANNER_HINTS: list[tuple[tuple[str, ...], DeviceType]] = [
+    (("goahead", "hikvision", "dahua", "webs", "jaws", "ipcamera"), CAMERA),
+    (("dropbear", "openwrt", "routeros", "mikrotik", "dd-wrt", "lighttpd/1.4.4"), NETDEV),
+    (("cups", "jetdirect", "hp http server"), PRINTER),
+    (("ubuntu", "debian", "raspbian", "raspberry"), SBC),
+]
+
+
 def classify(
     *,
     ip: str,
@@ -67,20 +76,43 @@ def classify(
     services: Optional[set[str]],
     gateway: Optional[str],
     upnp: Optional[dict] = None,
+    model: Optional[str] = None,
+    banners: Optional[dict] = None,
+    os_family: Optional[str] = None,
 ) -> tuple[DeviceType, bool]:
     """Combina os sinais disponíveis e retorna (tipo mais provável, é_palpite)."""
     services = services or set()
     upnp = upnp or {}
+    banners = banners or {}
     v = (vendor or "").lower()
     upnp_text = " ".join(
         filter(None, [upnp.get("server"), upnp.get("model"), upnp.get("name")])
     ).lower()
     upnp_types = " ".join(upnp.get("types") or ()).lower()
-    text = " ".join(filter(None, [hostname, mdns_name, upnp_text])).lower()
+    banner_text = " ".join(str(x) for x in banners.values() if x).lower()
+    text = " ".join(
+        filter(None, [hostname, mdns_name, model, upnp_text, banner_text])
+    ).lower()
 
     # 1) Gateway é sempre o roteador.
     if gateway and ip == gateway:
         return ROUTER, False
+
+    # 2) O modelo anunciado por mDNS é o sinal mais confiável que existe:
+    #    o próprio aparelho dizendo o que é ("MacBook Air", "Apple TV").
+    if model:
+        m = model.lower()
+        model_map: list[tuple[tuple[str, ...], DeviceType]] = [
+            (("iphone", "ipad", "galaxy", "pixel"), PHONE),
+            (("macbook", "imac", "mac mini", "mac studio", "mac pro"), COMPUTER),
+            (("apple tv", "chromecast", "fire tv", "shield", "roku"), TV),
+            (("homepod", "nest mini", "nest audio", "nest hub", "echo"), SPEAKER),
+            (("apple watch", "galaxy watch"), WATCH),
+            (("deskjet", "laserjet", "officejet", "ecotank", "pixma"), PRINTER),
+        ]
+        for keys, dev in model_map:
+            if any(k in m for k in keys):
+                return dev, False
 
     # 2) Serviços/portas decisivos.
     for keys, dev in _DECISIVE:
@@ -153,6 +185,12 @@ def classify(
         if any(k in v for k in keys):
             return dev, False
 
+    # 5b) Banner de servidor web/SSH embarcado.
+    if banner_text:
+        for keys, dev in _BANNER_HINTS:
+            if any(k in banner_text for k in keys):
+                return dev, False
+
     # 6) Equipamento de rede (não é o gateway, então é AP/repetidor/switch).
     if any(k in v for k in _NET_VENDORS):
         # A Intelbras vende de câmera a roteador; sem outro sinal, fica no palpite.
@@ -168,5 +206,11 @@ def classify(
     #    "endereço WiFi privado" ligado (padrão no iOS e no Android).
     if is_random_mac(mac):
         return PHONE, True
+
+    # 9) Último recurso: a família de SO que o TTL denuncia.
+    if os_family == "Windows":
+        return COMPUTER, True
+    if os_family == "rede/embarcado":
+        return NETDEV, True
 
     return UNKNOWN, False

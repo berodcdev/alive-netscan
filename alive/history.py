@@ -71,7 +71,12 @@ def _load_all() -> dict:
 
 
 def compare(hosts: list[dict], cidr: Optional[str]) -> Diff:
-    """Compara a lista atual com o último scan salvo desta subrede."""
+    """Compara a lista atual com o último scan salvo desta subrede.
+
+    Também anota em cada host ``first_seen``, ``seen_count`` e ``presence``
+    (fração dos scans desta rede em que o host apareceu) — é o que responde
+    "esse aparelho é de casa ou apareceu agora?".
+    """
     if not cidr:
         return Diff()
     entry = _load_all().get("networks", {}).get(cidr)
@@ -79,7 +84,24 @@ def compare(hosts: list[dict], cidr: Optional[str]) -> Diff:
         return Diff()
 
     before = {h.get("key"): h for h in entry.get("hosts", []) if isinstance(h, dict)}
+    total_scans = int(entry.get("total_scans") or 1)
     now = {host_key(h): h for h in hosts}
+
+    prev_time = entry.get("time")
+    for key, h in now.items():
+        prev = before.get(key)
+        if prev:
+            # Snapshots gravados por versões antigas não têm first_seen: o
+            # horário do próprio snapshot é a melhor aproximação.
+            h["first_seen"] = (
+                prev.get("first_seen") or prev.get("last_seen") or prev_time
+            )
+            h["seen_count"] = int(prev.get("seen_count") or 1) + 1
+        else:
+            h["first_seen"] = None  # visto agora pela primeira vez
+            h["seen_count"] = 1
+        h["presence"] = min(1.0, h["seen_count"] / max(1, total_scans + 1))
+
     gone = [h for k, h in before.items() if k not in now]
     return Diff(
         new_keys={k for k in now if k not in before},
@@ -89,13 +111,35 @@ def compare(hosts: list[dict], cidr: Optional[str]) -> Diff:
     )
 
 
+def seen_label(host: dict, first_run: bool = False) -> str:
+    """Texto curto da coluna VISTO: '1ª vez', 'sempre' ou 'há 3d'."""
+    if first_run:
+        return "—"
+    first = host.get("first_seen")
+    if not first:
+        return "1ª vez"
+    if (host.get("presence") or 0) >= 0.8 and (host.get("seen_count") or 0) >= 3:
+        return "sempre"
+    secs = max(0, int(time.time() - first))
+    if secs < 3600:
+        return f"há {max(1, secs // 60)}min"
+    if secs < 86400:
+        return f"há {secs // 3600}h"
+    if secs < 86400 * 30:
+        return f"há {secs // 86400}d"
+    return f"há {secs // (86400 * 30)}mes"
+
+
 def save(hosts: list[dict], cidr: Optional[str]) -> None:
     """Grava o snapshot atual. Silencioso em qualquer falha de I/O."""
     if not cidr:
         return
     data = _load_all()
+    now = time.time()
+    previous = data.get("networks", {}).get(cidr) or {}
     data.setdefault("networks", {})[cidr] = {
-        "time": time.time(),
+        "time": now,
+        "total_scans": int(previous.get("total_scans") or 0) + 1,
         "hosts": [
             {
                 "key": host_key(h),
@@ -103,6 +147,9 @@ def save(hosts: list[dict], cidr: Optional[str]) -> None:
                 "mac": h.get("mac"),
                 "name": h.get("name"),
                 "type": h["device"].label if h.get("device") else None,
+                "first_seen": h.get("first_seen") or now,
+                "last_seen": now,
+                "seen_count": int(h.get("seen_count") or 1),
             }
             for h in hosts
         ],

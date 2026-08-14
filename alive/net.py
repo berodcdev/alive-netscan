@@ -12,7 +12,7 @@ import re
 import shutil
 import socket
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 IS_MAC = platform.system() == "Darwin"
@@ -28,6 +28,11 @@ class NetInfo:
     network: Optional[ipaddress.IPv4Network]
     gateway: Optional[str]
     ssid: Optional[str]
+    # Preenchidos depois do scan (best-effort): qualidade do link WiFi,
+    # resolvedores DNS em uso e o que o gateway contou sobre a WAN.
+    link: dict = field(default_factory=dict)
+    dns: list = field(default_factory=list)
+    wan: dict = field(default_factory=dict)
 
     @property
     def cidr(self) -> Optional[str]:
@@ -278,6 +283,71 @@ def get_interface_mac(iface: Optional[str]) -> Optional[str]:
     if m:
         return m.group(1).lower()
     return None
+
+
+# --------------------------------------------------------------------------- #
+# Qualidade do link WiFi e resolvedores DNS
+# --------------------------------------------------------------------------- #
+def get_link_info(iface: Optional[str]) -> dict:
+    """Sinal, canal/frequência e taxa do WiFi. Best-effort, dict vazio se n/d."""
+    info: dict = {}
+    if not iface:
+        return info
+    if IS_LINUX and shutil.which("iw"):
+        out = _run(["iw", "dev", iface, "link"])
+        m = re.search(r"freq:\s*(\d+)", out)
+        if m:
+            info["freq"] = int(m.group(1))
+        m = re.search(r"signal:\s*(-?\d+)\s*dBm", out)
+        if m:
+            info["signal"] = int(m.group(1))
+        m = re.search(r"tx bitrate:\s*([\d.]+)\s*MBit/s", out)
+        if m:
+            info["bitrate"] = float(m.group(1))
+        return info
+    if IS_MAC:
+        out = _run(["ipconfig", "getsummary", iface])
+        m = re.search(r"^\s*Channel\s*:\s*(\d+)", out, re.MULTILINE)
+        if m:
+            info["channel"] = int(m.group(1))
+        m = re.search(r"^\s*RSSI\s*:\s*(-?\d+)", out, re.MULTILINE)
+        if m:
+            info["signal"] = int(m.group(1))
+    return info
+
+
+def channel_from_freq(freq: Optional[int]) -> Optional[int]:
+    """Converte frequência (MHz) em número de canal WiFi."""
+    if not freq:
+        return None
+    if 2412 <= freq <= 2484:
+        return 14 if freq == 2484 else (freq - 2407) // 5
+    if 5000 <= freq <= 5900:
+        return (freq - 5000) // 5
+    if 5955 <= freq <= 7115:  # 6 GHz
+        return (freq - 5955) // 5 + 1
+    return None
+
+
+def get_dns_servers() -> list[str]:
+    """Servidores DNS em uso pelo sistema (só IPv4, ordem de preferência)."""
+    servers: list[str] = []
+    if IS_MAC:
+        out = _run(["scutil", "--dns"])
+        for m in re.finditer(r"nameserver\[\d+\]\s*:\s*(\d+\.\d+\.\d+\.\d+)", out):
+            if m.group(1) not in servers:
+                servers.append(m.group(1))
+        if servers:
+            return servers[:3]
+    try:
+        with open("/etc/resolv.conf", encoding="utf-8") as fh:
+            for line in fh:
+                m = re.match(r"\s*nameserver\s+(\d+\.\d+\.\d+\.\d+)", line)
+                if m and m.group(1) not in servers:
+                    servers.append(m.group(1))
+    except OSError:
+        pass
+    return servers[:3]
 
 
 def discover() -> NetInfo:

@@ -22,6 +22,7 @@ from . import (
     __version__,
     classify,
     enrich,
+    findings,
     history,
     net,
     probe,
@@ -258,13 +259,14 @@ def run(args: argparse.Namespace) -> int:
             f"[dim]({method})[/dim]"
         )
 
-    hosts, diff = _collect(args, netinfo, use_nmap=use_nmap, quiet=args.json)
+    hosts, diff, found = _collect(args, netinfo, use_nmap=use_nmap, quiet=args.json)
 
     if args.json:
-        print(render.to_json(hosts, netinfo))
+        print(render.to_json(hosts, netinfo, found))
     else:
-        render.print_summary(netinfo, hosts, method=method, diff=diff)
+        render.print_summary(netinfo, hosts, method=method, diff=diff, findings=found)
         render.render_table(hosts, netinfo)
+        render.print_findings(found)
     return 0
 
 
@@ -338,6 +340,22 @@ def _collect(
     netbios = {} if args.no_netbios else _staged(
         args, quiet, "consultando NetBIOS", lambda: probe.query_netbios(ips)
     )
+    # Banners só fazem sentido depois de saber quais portas estão abertas.
+    banners = {} if args.no_ports else _staged(
+        args, quiet, "lendo banners", lambda: probe.grab_banners(ports)
+    )
+
+    # O gateway conta, via UPnP, o IP público, o uptime do link e — o que mais
+    # importa — os redirecionamentos de porta ativos para a internet.
+    netinfo.link = net.get_link_info(netinfo.interface)
+    netinfo.dns = net.get_dns_servers()
+    if not args.no_upnp:
+        location = probe.find_gateway_location(upnp, netinfo.gateway)
+        if location:
+            netinfo.wan = _staged(
+                args, quiet, "interrogando o gateway (UPnP)",
+                lambda: probe.gateway_wan_info(location),
+            )
 
     local_name = _local_hostname()
     local_mac = scanner.normalize_mac(net.get_interface_mac(netinfo.interface))
@@ -352,16 +370,21 @@ def _collect(
 
         m = mdns.get(ip, {})
         u = upnp.get(ip, {})
+        b = banners.get(ip, {})
         services = set(m.get("services") or []) | set(ports.get(ip) or [])
         hostname = hostnames.get(ip)
         # Ordem de preferência de nome: mDNS (mais amigável) > UPnP > NetBIOS > rDNS.
         name = m.get("name") or u.get("name") or netbios.get(ip) or hostname
         vendor = (vendors.get(mac) if mac else None) or u.get("manufacturer")
+        # Modelo: o aparelho dizendo o que é (TXT do mDNS) vale mais que o UPnP.
+        model = m.get("model") or u.get("model")
+        os_family = scanner.os_family_from_ttl(h.get("ttl"))
 
         dev, inferred = classify.classify(
             ip=ip, mac=mac, vendor=vendor, hostname=hostname,
             mdns_name=m.get("name"), services=services,
             gateway=netinfo.gateway, upnp=u,
+            model=model, banners=b, os_family=os_family,
         )
         # O host local é a máquina que roda o alive: é computador, sem palpite.
         # (Macs e notebooks Linux também usam MAC aleatório na WiFi, o que sem
@@ -376,23 +399,35 @@ def _collect(
                 "mac": mac,
                 "name": name,
                 "vendor": vendor,
+                "model": model,
                 "services": services,
+                "banners": b,
                 "device": dev,
                 "inferred": inferred,
                 "random_mac": scanner.is_random_mac(mac),
+                "rtt": h.get("rtt"),
+                "ttl": h.get("ttl"),
+                "os_family": os_family,
+                "via": h.get("via"),
+                "history_off": bool(args.no_history),
             }
         )
 
     hosts = _sort_hosts(hosts, args.sort)
 
-    # 5) Histórico: quem é novo e quem saiu desde o último scan desta subrede.
+    # 5) Histórico: quem é novo, quem saiu e desde quando cada um é conhecido.
     diff = history.Diff()
     if not args.no_history:
         diff = history.compare(hosts, netinfo.cidr)
         for h in hosts:
             h["is_new"] = history.host_key(h) in diff.new_keys
         history.save(hosts, netinfo.cidr)
-    return hosts, diff
+
+    # 6) Achados: o que merece atenção no que foi encontrado.
+    found = findings.collect(hosts, netinfo.wan)
+    for h in hosts:
+        h["notes"] = findings.short_notes(h)
+    return hosts, diff, found
 
 
 def _staged(args, quiet: bool, label: str, fn):
@@ -425,12 +460,13 @@ def _run_watch(
     cycle = 0
     while True:
         cycle += 1
-        hosts, diff = _collect(args, netinfo, use_nmap=use_nmap, quiet=False)
+        hosts, diff, found = _collect(args, netinfo, use_nmap=use_nmap, quiet=False)
         stamp = time.strftime("%H:%M:%S")
         changed = any(h.get("is_new") for h in hosts) or bool(diff.gone)
         if cycle == 1:
-            render.print_summary(netinfo, hosts, method=method, diff=diff)
+            render.print_summary(netinfo, hosts, method=method, diff=diff, findings=found)
             render.render_table(hosts, netinfo)
+            render.print_findings(found)
         elif changed:
             render.console.print(
                 f"\n[dim]── ciclo {cycle} · {stamp} ──[/dim]"
@@ -452,7 +488,21 @@ def _run_demo(args: argparse.Namespace) -> int:
         ip="192.168.0.42",
         network=ipaddress.ip_network("192.168.0.0/24"),
         gateway="192.168.0.1",
-        ssid="CASA-2.4G",
+        ssid="CASA-5G",
+        link={"channel": 36, "signal": -47, "bitrate": 866.0},
+        dns=["192.168.0.1", "1.1.1.1"],
+        wan={
+            "model": "TP-Link Archer C6",
+            "external_ip": "189.45.10.77",
+            "uptime_s": 1054800,
+            "port_mappings": [
+                {
+                    "external_port": "32400", "internal_port": "32400",
+                    "internal_client": "192.168.0.101", "protocol": "TCP",
+                    "description": "plex",
+                }
+            ],
+        },
     )
 
     def host(ip, mac, name, vendor, dev, services=(), **extra):
@@ -461,23 +511,41 @@ def _run_demo(args: argparse.Namespace) -> int:
             "services": set(services), "device": dev,
             "inferred": False, "is_new": False,
             "random_mac": scanner.is_random_mac(mac),
+            "model": None, "banners": {}, "os_family": None,
+            "rtt": None, "ttl": None, "via": "ping", "notes": [],
+            "first_seen": time.time() - 86400 * 9, "seen_count": 40, "presence": 1.0,
         }
         h.update(extra)
+        h["notes"] = findings.short_notes(h)
         return h
 
     C = classify
     hosts = [
-        host("192.168.0.1", "a4:2b:8c:1f:07:e3", "roteador", "TP-Link Systems Inc.", C.ROUTER, ("dns", "http")),
-        host("192.168.0.42", "f0:18:98:2a:1b:cd", "meu-notebook", "Apple, Inc.", C.COMPUTER, ("ssh", "workstation")),
-        host("192.168.0.51", "3c:5a:b4:77:21:9f", "Galaxy-S23", "Samsung Electronics Co.,Ltd", C.PHONE),
-        host("192.168.0.55", "6e:1a:c4:90:2d:7b", None, None, C.PHONE, (), inferred=True, is_new=True),
-        host("192.168.0.60", "54:60:09:aa:bb:12", "Sala (Chromecast)", "Google LLC", C.TV, ("googlecast", "cast")),
-        host("192.168.0.71", "68:37:e9:3d:4c:8a", "Echo-Cozinha", "Amazon Technologies", C.SPEAKER, ("amzn-alexa",)),
-        host("192.168.0.80", "9c:93:4e:55:70:2b", "HP-LaserJet", "HP Inc.", C.PRINTER, ("ipp", "jetdirect")),
-        host("192.168.0.88", "3c:e1:a1:44:0b:19", "cam-garagem", "Intelbras", C.CAMERA, ("rtsp", "http")),
-        host("192.168.0.90", "d8:f1:5b:23:9e:44", "lampada-quarto", "Espressif Inc.", C.IOT, ("mqtt",)),
-        host("192.168.0.101", "dc:a6:32:11:88:f0", "raspberrypi", "Raspberry Pi Foundation", C.SBC, ("ssh", "plex")),
-        host("192.168.0.110", "78:c8:81:6e:aa:01", "PlayStation-5", "Sony Interactive", C.GAME),
+        host("192.168.0.1", "a4:2b:8c:1f:07:e3", "roteador", "TP-Link", C.ROUTER,
+             ("dns", "http"), model="Archer C6", rtt=2.1),
+        host("192.168.0.42", "f0:18:98:2a:1b:cd", "meu-notebook", "Apple, Inc.", C.COMPUTER,
+             ("ssh", "workstation"), model="MacBook Air", rtt=7.4),
+        host("192.168.0.51", "3c:5a:b4:77:21:9f", "Galaxy-S23", "Samsung Electronics Co.,Ltd",
+             C.PHONE, (), rtt=31.0),
+        host("192.168.0.55", "6e:1a:c4:90:2d:7b", None, None, C.PHONE, (),
+             inferred=True, is_new=True, rtt=44.2, first_seen=None, seen_count=1, presence=0.02),
+        host("192.168.0.60", "54:60:09:aa:bb:12", "Sala (Chromecast)", "Google LLC", C.TV,
+             ("googlecast", "cast"), model="Chromecast Ultra", rtt=12.0),
+        host("192.168.0.71", "68:37:e9:3d:4c:8a", "Echo-Cozinha", "Amazon", C.SPEAKER,
+             ("amzn-alexa",), model="Echo Dot", rtt=18.3),
+        host("192.168.0.80", "9c:93:4e:55:70:2b", "HP-LaserJet", "HP Inc.", C.PRINTER,
+             ("ipp", "jetdirect"), model="HP LaserJet M28w", rtt=9.9),
+        host("192.168.0.88", "3c:e1:a1:44:0b:19", "cam-garagem", "Intelbras", C.CAMERA,
+             ("rtsp", "http", "telnet"), banners={"http_server": "GoAhead-Webs"}, rtt=3.2),
+        host("192.168.0.90", "d8:f1:5b:23:9e:44", "lampada-quarto", "Espressif", C.IOT,
+             ("mqtt",), rtt=25.7),
+        host("192.168.0.101", "dc:a6:32:11:88:f0", "raspberrypi", "Raspberry Pi Foundation",
+             C.SBC, ("ssh", "plex"), banners={"ssh": "OpenSSH_9.6p1 Debian"}, rtt=1.8),
+        host("192.168.0.110", "78:c8:81:6e:aa:01", "PlayStation-5", "Sony Interactive", C.GAME,
+             (), rtt=15.1),
+        host("192.168.0.150", "00:1a:2b:3c:4d:5e", None, "Dell Inc.", C.COMPUTER, (),
+             inferred=True, via="arp", ttl=128, os_family="Windows",
+             first_seen=time.time() - 86400 * 2, seen_count=3, presence=0.3),
     ]
     demo_diff = history.Diff(
         new_keys={"ip:192.168.0.55"},
@@ -486,17 +554,21 @@ def _run_demo(args: argparse.Namespace) -> int:
         first_run=False,
     )
 
+    demo_findings = findings.collect(hosts, demo_net.wan)
+
     if args.json:
-        print(render.to_json(hosts, demo_net))
+        print(render.to_json(hosts, demo_net, demo_findings))
         return 0
     render.print_banner()
     render.info("[yellow]modo demonstração[/yellow] [dim](dados fictícios)[/dim]")
     render.print_summary(
         demo_net, hosts,
-        method="nmap + ping sweep + ARP + mDNS + portas + UPnP + NetBIOS",
+        method="nmap + ping + ARP + mDNS + portas + banners + UPnP + NetBIOS",
         diff=demo_diff,
+        findings=demo_findings,
     )
     render.render_table(hosts, demo_net)
+    render.print_findings(demo_findings)
     return 0
 
 
