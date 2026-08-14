@@ -136,6 +136,13 @@ def discover_mdns(duration: float = 3.0) -> dict[str, dict]:
     except ImportError:
         return {}
 
+    # O zeroconf abre um socket por interface e loga traceback quando alguma não
+    # tem rota (VPN, túnel, interface caída). Isso não é erro nosso e não pode
+    # sujar a saída da ferramenta.
+    import logging
+
+    logging.getLogger("zeroconf").setLevel(logging.CRITICAL)
+
     import time as _time  # local: evita depender de time no topo
 
     results: dict[str, dict] = {}

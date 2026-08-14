@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import ipaddress
 import sys
+import time
 from typing import Optional
 
 from rich.progress import (
@@ -16,7 +17,17 @@ from rich.progress import (
     TimeElapsedColumn,
 )
 
-from . import __author_email__, __version__, classify, enrich, net, render, scanner
+from . import (
+    __author_email__,
+    __version__,
+    classify,
+    enrich,
+    history,
+    net,
+    probe,
+    render,
+    scanner,
+)
 
 DESCRIPTION = """\
 [bold green]alive[/bold green] — reconhecimento de hosts na rede local [dim](WiFi/LAN · macOS + Linux)[/dim]
@@ -28,8 +39,10 @@ e tipo de dispositivo (roteador, computador, celular, TV, assistente, IoT...).\
 EPILOG = """\
 [bold green]exemplos[/bold green]
   [green]alive[/green]                          [dim]# varre a rede WiFi atual[/dim]
-  [green]alive --fast[/green]                   [dim]# rápido: só ping sweep + ARP[/dim]
+  [green]alive --fast[/green]                   [dim]# rápido: sem mDNS, fabricante nem sondas[/dim]
   [green]alive -n 192.168.0.0/24[/green]        [dim]# varre uma subrede específica[/dim]
+  [green]alive --watch[/green]                  [dim]# monitora e avisa quem entra e sai[/dim]
+  [green]alive --watch 60[/green]               [dim]# monitorando a cada 60 segundos[/dim]
   [green]alive --sort type[/green]              [dim]# agrupa por tipo de dispositivo[/dim]
   [green]alive --json > recon.json[/green]      [dim]# exporta o resultado em JSON[/dim]
 
@@ -101,7 +114,7 @@ def build_parser() -> argparse.ArgumentParser:
     veloc = parser.add_argument_group("varredura")
     veloc.add_argument(
         "--fast", action="store_true",
-        help="modo rápido: pula mDNS e fabricante (equivale a --no-mdns --no-vendor).",
+        help="modo rápido: pula mDNS, fabricante e as sondas (portas/UPnP/NetBIOS).",
     )
     veloc.add_argument(
         "--no-nmap", action="store_true",
@@ -116,6 +129,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="pular a identificação do fabricante pelo MAC.",
     )
     veloc.add_argument(
+        "--no-ports", action="store_true",
+        help="pular o fingerprint por portas TCP [dim](identifica iPhone, câmera, NAS...)[/dim].",
+    )
+    veloc.add_argument(
+        "--no-upnp", action="store_true",
+        help="pular a descoberta SSDP/UPnP [dim](nome e modelo de TVs, IoT, roteadores)[/dim].",
+    )
+    veloc.add_argument(
+        "--no-netbios", action="store_true",
+        help="pular a consulta de nomes NetBIOS [dim](Windows, Samba, NAS)[/dim].",
+    )
+    veloc.add_argument(
+        "--upnp-time", type=float, default=2.5, metavar="SEG",
+        help="tempo ouvindo respostas SSDP/UPnP [dim](padrão: 2.5s)[/dim].",
+    )
+    veloc.add_argument(
         "-t", "--timeout", type=float, default=1.0, metavar="SEG",
         help="tempo de espera do ping por host [dim](padrão: 1.0s)[/dim].",
     )
@@ -126,6 +155,16 @@ def build_parser() -> argparse.ArgumentParser:
     veloc.add_argument(
         "--mdns-time", type=float, default=3.0, metavar="SEG",
         help="tempo ouvindo anúncios mDNS/Bonjour [dim](padrão: 3.0s)[/dim].",
+    )
+
+    monitor = parser.add_argument_group("monitoramento")
+    monitor.add_argument(
+        "--watch", nargs="?", type=float, const=30.0, default=None, metavar="SEG",
+        help="fica varrendo e avisa quem entra e sai [dim](padrão: a cada 30s)[/dim].",
+    )
+    monitor.add_argument(
+        "--no-history", action="store_true",
+        help="não comparar com o scan anterior nem marcar dispositivos novos.",
     )
 
     saida = parser.add_argument_group("saída")
@@ -168,17 +207,32 @@ def run(args: argparse.Namespace) -> int:
     if getattr(args, "demo", False):
         return _run_demo(args)
 
-    # --fast é um atalho para --no-mdns --no-vendor.
+    # --fast é um atalho: só ping sweep + ARP, sem nenhuma sonda de nome/tipo.
     if getattr(args, "fast", False):
         args.no_mdns = True
         args.no_vendor = True
+        args.no_ports = True
+        args.no_upnp = True
+        args.no_netbios = True
 
     # 1) Descobrir a rede local.
     netinfo = net.discover()
+    vpn_note: Optional[str] = None
     if args.interface:
+        # Com -i, tudo passa a vir da interface escolhida: o IP da rota padrão
+        # pode ser de outra rede (VPN), o que derivaria a subrede errada.
         netinfo.interface = args.interface
+        netinfo.ip = net.get_interface_ip(args.interface) or netinfo.ip
+        netinfo.gateway = net.get_gateway_for_interface(args.interface) or netinfo.gateway
         netinfo.network = net.get_network_for_interface(args.interface, netinfo.ip)
         netinfo.ssid = net.get_ssid(args.interface)
+    elif net.is_virtual_interface(netinfo.interface) and not args.network:
+        # Rota padrão via VPN/túnel: a rede detectada não é a WiFi local.
+        vpn_note = (
+            f"a rota padrão sai por [bold]{netinfo.interface}[/bold] (VPN/túnel). "
+            "Para varrer a WiFi, use [bold]-i en0[/bold] "
+            "(Linux: [bold]-i wlan0[/bold]) ou [bold]-n CIDR[/bold]."
+        )
 
     network = _resolve_network(args, netinfo)
     if network is None:
@@ -190,22 +244,64 @@ def run(args: argparse.Namespace) -> int:
     netinfo.network = network
 
     use_nmap = (not args.no_nmap) and scanner.has_nmap()
-    method = "nmap + ping sweep + ARP" if use_nmap else "ping sweep + ARP"
+    method = _method_label(args, use_nmap)
+
+    if args.watch is not None:
+        return _run_watch(args, netinfo, use_nmap=use_nmap, method=method, note=vpn_note)
 
     if not args.json:
         render.print_banner()
+        if vpn_note:
+            render.warn(vpn_note)
         render.info(
             f"varrendo [bold green]{netinfo.cidr}[/bold green] "
             f"[dim]({method})[/dim]"
         )
 
-    # 2) Scan (com barra de progresso, exceto em modo JSON).
-    total = max(1, network.num_addresses - 2)
+    hosts, diff = _collect(args, netinfo, use_nmap=use_nmap, quiet=args.json)
+
     if args.json:
-        hosts_raw = scanner.scan(
-            network, use_nmap=use_nmap, timeout=args.timeout,
-            workers=args.workers, local_ip=netinfo.ip, gateway=netinfo.gateway,
-        )
+        print(render.to_json(hosts, netinfo))
+    else:
+        render.print_summary(netinfo, hosts, method=method, diff=diff)
+        render.render_table(hosts, netinfo)
+    return 0
+
+
+def _method_label(args: argparse.Namespace, use_nmap: bool) -> str:
+    """Descreve as técnicas realmente usadas nesta execução."""
+    parts = ["nmap"] if use_nmap else []
+    parts += ["ping sweep", "ARP"]
+    if not args.no_mdns:
+        parts.append("mDNS")
+    if not args.no_ports:
+        parts.append("portas")
+    if not args.no_upnp:
+        parts.append("UPnP")
+    if not args.no_netbios:
+        parts.append("NetBIOS")
+    return " + ".join(parts)
+
+
+def _collect(
+    args: argparse.Namespace,
+    netinfo: net.NetInfo,
+    *,
+    use_nmap: bool,
+    quiet: bool,
+) -> tuple[list[dict], history.Diff]:
+    """Executa scan + enriquecimento + sondas e devolve (hosts, diff)."""
+    network = netinfo.network
+    assert network is not None  # garantido por _resolve_network
+
+    # 1) Hosts vivos (barra de progresso, exceto em JSON/watch silencioso).
+    total = max(1, network.num_addresses - 2)
+    scan_kwargs = dict(
+        use_nmap=use_nmap, timeout=args.timeout, workers=args.workers,
+        local_ip=netinfo.ip, gateway=netinfo.gateway,
+    )
+    if quiet:
+        hosts_raw = scanner.scan(network, **scan_kwargs)
     else:
         with Progress(
             SpinnerColumn(style="green"),
@@ -218,43 +314,61 @@ def run(args: argparse.Namespace) -> int:
         ) as progress:
             task = progress.add_task("scan", total=total)
             hosts_raw = scanner.scan(
-                network, use_nmap=use_nmap, timeout=args.timeout,
-                workers=args.workers, local_ip=netinfo.ip, gateway=netinfo.gateway,
-                progress=lambda: progress.advance(task),
+                network, progress=lambda: progress.advance(task), **scan_kwargs
             )
             progress.update(task, completed=total)
 
     ips = [h["ip"] for h in hosts_raw]
     macs = [h["mac"] for h in hosts_raw if h["mac"]]
 
-    # 3) Enriquecimento.
+    # 2) Enriquecimento passivo.
     hostnames = enrich.resolve_hostnames(ips)
     vendors = {} if args.no_vendor else enrich.lookup_vendors(macs)
-    mdns = {} if args.no_mdns else _run_mdns(args, netinfo, has_json=args.json)
+    mdns = {} if args.no_mdns else _staged(
+        args, quiet, "sniffing mDNS/Bonjour", lambda: enrich.discover_mdns(args.mdns_time)
+    )
 
-    # Nome do próprio host: sabemos com certeza (é a máquina que roda o alive).
+    # 3) Sondas ativas — é o que resolve os hosts sem nome nem OUI.
+    ports = {} if args.no_ports else _staged(
+        args, quiet, "fingerprint de portas", lambda: probe.probe_ports(ips)
+    )
+    upnp = {} if args.no_upnp else _staged(
+        args, quiet, "sondando SSDP/UPnP", lambda: probe.discover_ssdp(args.upnp_time)
+    )
+    netbios = {} if args.no_netbios else _staged(
+        args, quiet, "consultando NetBIOS", lambda: probe.query_netbios(ips)
+    )
+
     local_name = _local_hostname()
+    local_mac = scanner.normalize_mac(net.get_interface_mac(netinfo.interface))
 
-    # 4) Classificação + montagem final.
+    # 4) Fusão dos sinais + classificação.
     hosts: list[dict] = []
     for h in hosts_raw:
         ip = h["ip"]
-        mac = h["mac"]
         is_self = bool(netinfo.ip and ip == netinfo.ip)
+        # A tabela ARP nunca lista a própria máquina: usamos o MAC da interface.
+        mac = h["mac"] or (local_mac if is_self else None)
+
         m = mdns.get(ip, {})
-        services = set(m.get("services") or [])
+        u = upnp.get(ip, {})
+        services = set(m.get("services") or []) | set(ports.get(ip) or [])
         hostname = hostnames.get(ip)
-        mdns_name = m.get("name")
-        vendor = vendors.get(mac) if mac else None
-        dev = classify.classify(
+        # Ordem de preferência de nome: mDNS (mais amigável) > UPnP > NetBIOS > rDNS.
+        name = m.get("name") or u.get("name") or netbios.get(ip) or hostname
+        vendor = (vendors.get(mac) if mac else None) or u.get("manufacturer")
+
+        dev, inferred = classify.classify(
             ip=ip, mac=mac, vendor=vendor, hostname=hostname,
-            mdns_name=mdns_name, services=services, gateway=netinfo.gateway,
+            mdns_name=m.get("name"), services=services,
+            gateway=netinfo.gateway, upnp=u,
         )
-        name = mdns_name or hostname
-        # O host local é sempre um computador; usamos seu hostname se nada melhor.
+        # O host local é a máquina que roda o alive: é computador, sem palpite.
+        # (Macs e notebooks Linux também usam MAC aleatório na WiFi, o que sem
+        # isso os classificaria como "CELULAR ?".)
         if is_self:
-            if dev is classify.UNKNOWN:
-                dev = classify.COMPUTER
+            if dev is classify.UNKNOWN or inferred:
+                dev, inferred = classify.COMPUTER, False
             name = name or local_name
         hosts.append(
             {
@@ -264,18 +378,71 @@ def run(args: argparse.Namespace) -> int:
                 "vendor": vendor,
                 "services": services,
                 "device": dev,
+                "inferred": inferred,
+                "random_mac": scanner.is_random_mac(mac),
             }
         )
 
     hosts = _sort_hosts(hosts, args.sort)
 
-    # 5) Saída.
-    if args.json:
-        print(render.to_json(hosts, netinfo))
-    else:
-        render.print_summary(netinfo, host_count=len(hosts), method=method)
-        render.render_table(hosts, netinfo)
-    return 0
+    # 5) Histórico: quem é novo e quem saiu desde o último scan desta subrede.
+    diff = history.Diff()
+    if not args.no_history:
+        diff = history.compare(hosts, netinfo.cidr)
+        for h in hosts:
+            h["is_new"] = history.host_key(h) in diff.new_keys
+        history.save(hosts, netinfo.cidr)
+    return hosts, diff
+
+
+def _staged(args, quiet: bool, label: str, fn):
+    """Roda uma etapa mostrando um spinner (ou silenciosa em JSON/watch)."""
+    if quiet:
+        return fn()
+    with render.console.status(
+        f"[green]{label}...[/green]", spinner="dots", spinner_style="green"
+    ):
+        return fn()
+
+
+def _run_watch(
+    args: argparse.Namespace,
+    netinfo: net.NetInfo,
+    *,
+    use_nmap: bool,
+    method: str,
+    note: Optional[str] = None,
+) -> int:
+    """Monitora a rede em ciclos, reportando entradas e saídas."""
+    interval = max(5.0, float(args.watch))
+    render.print_banner()
+    if note:
+        render.warn(note)
+    render.info(
+        f"monitorando [bold green]{netinfo.cidr}[/bold green] "
+        f"[dim](ciclo de {interval:.0f}s · {method} · ctrl-c para sair)[/dim]"
+    )
+    cycle = 0
+    while True:
+        cycle += 1
+        hosts, diff = _collect(args, netinfo, use_nmap=use_nmap, quiet=False)
+        stamp = time.strftime("%H:%M:%S")
+        changed = any(h.get("is_new") for h in hosts) or bool(diff.gone)
+        if cycle == 1:
+            render.print_summary(netinfo, hosts, method=method, diff=diff)
+            render.render_table(hosts, netinfo)
+        elif changed:
+            render.console.print(
+                f"\n[dim]── ciclo {cycle} · {stamp} ──[/dim]"
+            )
+            render.print_events(hosts, diff)
+            render.render_table(hosts, netinfo)
+        else:
+            render.console.print(
+                f"[dim][*] ciclo {cycle} · {stamp} · sem mudanças "
+                f"({len(hosts)} hosts)[/dim]"
+            )
+        time.sleep(interval)
 
 
 def _run_demo(args: argparse.Namespace) -> int:
@@ -288,31 +455,47 @@ def _run_demo(args: argparse.Namespace) -> int:
         ssid="CASA-2.4G",
     )
 
-    def host(ip, mac, name, vendor, dev, services=()):
-        return {
+    def host(ip, mac, name, vendor, dev, services=(), **extra):
+        h = {
             "ip": ip, "mac": mac, "name": name, "vendor": vendor,
             "services": set(services), "device": dev,
+            "inferred": False, "is_new": False,
+            "random_mac": scanner.is_random_mac(mac),
         }
+        h.update(extra)
+        return h
 
     C = classify
     hosts = [
-        host("192.168.0.1", "a4:2b:8c:1f:07:e3", None, "TP-Link Systems Inc.", C.ROUTER),
+        host("192.168.0.1", "a4:2b:8c:1f:07:e3", "roteador", "TP-Link Systems Inc.", C.ROUTER, ("dns", "http")),
         host("192.168.0.42", "f0:18:98:2a:1b:cd", "meu-notebook", "Apple, Inc.", C.COMPUTER, ("ssh", "workstation")),
         host("192.168.0.51", "3c:5a:b4:77:21:9f", "Galaxy-S23", "Samsung Electronics Co.,Ltd", C.PHONE),
-        host("192.168.0.60", "54:60:09:aa:bb:12", "Sala (Chromecast)", "Google LLC", C.TV, ("googlecast",)),
+        host("192.168.0.55", "6e:1a:c4:90:2d:7b", None, None, C.PHONE, (), inferred=True, is_new=True),
+        host("192.168.0.60", "54:60:09:aa:bb:12", "Sala (Chromecast)", "Google LLC", C.TV, ("googlecast", "cast")),
         host("192.168.0.71", "68:37:e9:3d:4c:8a", "Echo-Cozinha", "Amazon Technologies", C.SPEAKER, ("amzn-alexa",)),
-        host("192.168.0.80", "9c:93:4e:55:70:2b", "HP-LaserJet", "HP Inc.", C.PRINTER, ("ipp", "pdl-datastream")),
-        host("192.168.0.90", "d8:f1:5b:23:9e:44", "lampada-quarto", "Espressif Inc.", C.IOT),
-        host("192.168.0.101", "dc:a6:32:11:88:f0", "raspberrypi", "Raspberry Pi Foundation", C.SBC, ("ssh",)),
+        host("192.168.0.80", "9c:93:4e:55:70:2b", "HP-LaserJet", "HP Inc.", C.PRINTER, ("ipp", "jetdirect")),
+        host("192.168.0.88", "3c:e1:a1:44:0b:19", "cam-garagem", "Intelbras", C.CAMERA, ("rtsp", "http")),
+        host("192.168.0.90", "d8:f1:5b:23:9e:44", "lampada-quarto", "Espressif Inc.", C.IOT, ("mqtt",)),
+        host("192.168.0.101", "dc:a6:32:11:88:f0", "raspberrypi", "Raspberry Pi Foundation", C.SBC, ("ssh", "plex")),
         host("192.168.0.110", "78:c8:81:6e:aa:01", "PlayStation-5", "Sony Interactive", C.GAME),
     ]
+    demo_diff = history.Diff(
+        new_keys={"ip:192.168.0.55"},
+        gone=[{"ip": "192.168.0.120", "name": "iPad-Sala"}],
+        previous_time=time.time() - 900,
+        first_run=False,
+    )
 
     if args.json:
         print(render.to_json(hosts, demo_net))
         return 0
     render.print_banner()
     render.info("[yellow]modo demonstração[/yellow] [dim](dados fictícios)[/dim]")
-    render.print_summary(demo_net, host_count=len(hosts), method="nmap + ping sweep + ARP")
+    render.print_summary(
+        demo_net, hosts,
+        method="nmap + ping sweep + ARP + mDNS + portas + UPnP + NetBIOS",
+        diff=demo_diff,
+    )
     render.render_table(hosts, demo_net)
     return 0
 
@@ -328,17 +511,6 @@ def _local_hostname() -> Optional[str]:
     if not name:
         return None
     return name.split(".")[0]
-
-
-def _run_mdns(args, netinfo, has_json: bool) -> dict:
-    if has_json:
-        return enrich.discover_mdns(duration=args.mdns_time)
-    with render.console.status(
-        "[green]sniffing mDNS/Bonjour...[/green]",
-        spinner="dots",
-        spinner_style="green",
-    ):
-        return enrich.discover_mdns(duration=args.mdns_time)
 
 
 def main(argv: Optional[list[str]] = None) -> int:

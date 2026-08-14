@@ -39,6 +39,24 @@ def normalize_mac(mac: Optional[str]) -> Optional[str]:
     return ":".join(parts)
 
 
+def is_random_mac(mac: Optional[str]) -> bool:
+    """True se o MAC é *locally administered* — ou seja, aleatório/privado.
+
+    iOS, Android e macOS sortearam um MAC por rede ("endereço WiFi privado").
+    Esses MACs ligam o bit 0x02 do primeiro octeto, então o segundo dígito hex
+    cai em {2, 6, a, e}. Não existe OUI para consultar: nenhum fabricante é
+    dono da faixa. Vale distinguir isso de "não achei o fabricante".
+    """
+    if not mac:
+        return False
+    try:
+        first = int(mac.split(":")[0], 16)
+    except (ValueError, IndexError):
+        return False
+    # bit 1 = locally administered; bit 0 = multicast (não deveria aparecer aqui)
+    return bool(first & 0b10) and not bool(first & 0b1)
+
+
 # --------------------------------------------------------------------------- #
 # Ping (por host)
 # --------------------------------------------------------------------------- #

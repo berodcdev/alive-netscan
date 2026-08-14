@@ -23,3 +23,6 @@ mac_vendors.txt
 # Contexto interno de desenvolvimento — NÃO publicar no GitHub
 CLAUDE.md
 .claude/
+
+# Prompt interno de padronizacao de GIF — NAO publicar
+PADRAO_GIF.md

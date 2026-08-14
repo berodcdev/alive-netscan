@@ -13,12 +13,16 @@
 </p>
 
 `alive` varre a rede local e mostra, numa tabela limpa, **quem e o quê** está conectado:
-IP, MAC, fabricante e o **tipo** provável de cada aparelho — `ROTEADOR`, `COMPUTADOR`,
-`CELULAR`, `TV/STREAM`, `ASSISTENTE`, `IMPRESSORA`, `SERVIDOR`, `IOT`, `CONSOLE`.
+IP, MAC, fabricante e o **tipo** provável de cada aparelho — `ROTEADOR`, `REDE`,
+`COMPUTADOR`, `CELULAR`, `TV/STREAM`, `ASSISTENTE`, `IMPRESSORA`, `CAMERA`, `SERVIDOR`,
+`IOT`, `CONSOLE`, `WEARABLE`.
 
 Funciona em **macOS e Linux** sem exigir root: usa `nmap` quando disponível e, caso
-contrário, faz um *ping sweep* paralelo combinado com a tabela ARP. Nomes e tipos vêm de
-DNS reverso, mDNS/Bonjour (`zeroconf`) e da base de fabricantes OUI (offline).
+contrário, faz um *ping sweep* paralelo combinado com a tabela ARP. Nome e tipo vêm de
+cinco sinais independentes — DNS reverso, mDNS/Bonjour, NetBIOS, SSDP/UPnP e fingerprint
+por portas TCP — mais a base de fabricantes OUI (offline).
+
+Com `--watch`, fica monitorando e avisa **quem entra e quem sai** da rede.
 
 ---
 
@@ -56,26 +60,44 @@ preciso) e oferece instalar o `nmap` (opcional, mas recomendado).
 alive                      # varre a rede WiFi atual
 alive --demo               # demonstração com dados fictícios
 alive -h                   # ajuda completa (colorida)
-alive --fast               # rápido: só ping sweep + ARP
+alive --fast               # rápido: pula mDNS, fabricante e as sondas
 alive -n 192.168.0.0/24    # varre uma subrede específica
 alive -i wlan0             # força uma interface
+alive --watch              # monitora e avisa quem entra e sai (a cada 30s)
+alive --watch 60           # monitorando a cada 60 segundos
 alive --sort type          # agrupa por tipo de dispositivo
 alive --json > recon.json  # saída em JSON para automação
 ```
 
 > 💡 Veja a saída sem escanear nada: **`alive --demo`** (é o que aparece no GIF acima).
 
+Cada sonda pode ser desligada: `--no-nmap`, `--no-mdns`, `--no-vendor`, `--no-ports`,
+`--no-upnp`, `--no-netbios`, `--no-history`.
+
 ## Como funciona
 
 | Etapa | O que faz |
 |-------|-----------|
-| **Rede** | detecta interface, IP, subrede (CIDR), gateway e SSID por SO |
+| **Rede** | detecta interface, IP, subrede (CIDR), gateway e SSID por SO (avisa se a rota padrão sai por VPN) |
 | **Scan** | `nmap -sn` (se houver) + ping sweep paralelo; MACs via tabela ARP |
-| **Enriquecimento** | DNS reverso, mDNS/Bonjour, fabricante por OUI (offline) |
-| **Classificação** | heurística combinando fabricante + serviços mDNS + hostname |
+| **Nomes** | DNS reverso, mDNS/Bonjour, NetBIOS (Windows/Samba) e `friendlyName` do UPnP |
+| **Fingerprint** | fabricante por OUI (offline) + ~20 portas TCP que identificam o aparelho |
+| **Classificação** | combina fabricante, serviços, portas, UPnP e hostname — marca `?` quando é palpite |
+| **Histórico** | compara com o scan anterior da mesma subrede e marca quem é `NOVO` |
 
 Sem `nmap` ou sem `sudo`, o `alive` ainda funciona — apenas pode não ver aparelhos que
 ignoram ping. Instalar `nmap` e/ou rodar com `sudo` melhora a cobertura de MACs.
+
+### Por que alguns aparecem como `aleatório` e `CELULAR ?`
+
+Celulares (e Macs) ligam o **endereço Wi-Fi privado** por padrão: sorteiam um MAC
+*locally administered* por rede. Não existe fabricante para consultar — a faixa não pertence
+a ninguém. Em vez de mostrar um `?` sem explicação, o `alive` rotula esses como `aleatório`
+e usa o próprio fato como pista: MAC sorteado, sem serviço nenhum exposto, é quase sempre um
+celular — daí o `CELULAR ?`, onde o `?` significa "inferido, não confirmado".
+
+O histórico leva isso em conta: para MAC aleatório a identidade é o IP, senão todo celular
+apareceria como `NOVO` em cada scan.
 
 ## Requisitos
 
@@ -83,7 +105,39 @@ ignoram ping. Instalar `nmap` e/ou rodar com `sudo` melhora a cobertura de MACs.
 - Deps Python (instaladas no venv): `rich`, `rich-argparse`, `zeroconf`, `mac-vendor-lookup`
 - Opcional: `nmap` (melhora a cobertura do scan)
 
-O `alive` fica isolado no próprio ambiente virtual — não polui o Python do sistema.
+O `alive` fica isolado no próprio ambiente virtual — não polui o Python do sistema. As sondas
+de porta, SSDP e NetBIOS usam só a biblioteca padrão. O histórico do `--watch` fica em
+`~/.local/state/alive/history.json` (`--no-history` desliga).
+
+## Problemas comuns
+
+**Ele escaneou uma rede estranha (`10.x`, `100.64.x`) em vez da minha WiFi**
+
+Sua rota padrão está saindo por uma VPN/túnel — o `alive` avisa quando detecta isso. Aponte a
+interface física:
+
+```bash
+alive -i en0      # macOS
+alive -i wlan0    # Linux
+```
+
+**`ensurepip is not available` / falha ao criar o venv (Debian, Ubuntu, Raspberry Pi OS)**
+
+Nessas distros o módulo `venv` vem sem o `ensurepip`. O instalador tenta resolver sozinho
+(instala o pacote correto ou baixa o pip via `get-pip.py`); se ainda falhar, rode:
+
+```bash
+sudo apt install -y python3-venv   # ou pythonX.Y-venv, ex.: python3.14-venv
+./install.sh
+```
+
+**`alive: command not found` depois de instalar**
+
+O comando fica em `~/.local/bin`. Reabra o terminal ou rode:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
 
 ## Contribuindo
 

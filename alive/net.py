@@ -98,6 +98,56 @@ def _linux_default_route() -> tuple[Optional[str], Optional[str]]:
     return None, None
 
 
+# Interfaces virtuais: VPN, túneis, containers. Quando a rota padrão sai por uma
+# delas, a "rede local" detectada é a da VPN — não a WiFi que o usuário quer ver.
+_VIRTUAL_PREFIXES = (
+    "utun", "tun", "tap", "ppp", "wg", "ipsec", "gpd", "tailscale", "zt",
+    "docker", "br-", "veth", "vmnet", "virbr",
+)
+
+
+def is_virtual_interface(iface: Optional[str]) -> bool:
+    """True para VPN/túnel/bridge virtual (não é a rede WiFi/LAN física)."""
+    if not iface:
+        return False
+    return iface.lower().startswith(_VIRTUAL_PREFIXES)
+
+
+def get_interface_ip(iface: Optional[str]) -> Optional[str]:
+    """IP IPv4 atribuído a uma interface específica."""
+    if not iface:
+        return None
+    if IS_LINUX and shutil.which("ip"):
+        out = _run(["ip", "-o", "-f", "inet", "addr", "show", iface])
+        m = re.search(r"inet (\d+\.\d+\.\d+\.\d+)", out)
+        if m:
+            return m.group(1)
+    out = _run(["ifconfig", iface])
+    m = re.search(r"inet (\d+\.\d+\.\d+\.\d+)", out)
+    if m:
+        return m.group(1)
+    return None
+
+
+def get_gateway_for_interface(iface: Optional[str]) -> Optional[str]:
+    """Gateway da rota padrão de uma interface específica (best-effort)."""
+    if not iface:
+        return None
+    if IS_MAC:
+        out = _run(["route", "-n", "get", "-ifscope", iface, "default"])
+        for line in out.splitlines():
+            line = line.strip()
+            if line.startswith("gateway:"):
+                return line.split(":", 1)[1].strip()
+        return None
+    if shutil.which("ip"):
+        out = _run(["ip", "route", "show", "default", "dev", iface])
+        m = re.search(r"default via (\S+)", out)
+        if m:
+            return m.group(1)
+    return None
+
+
 # --------------------------------------------------------------------------- #
 # Máscara / rede
 # --------------------------------------------------------------------------- #
@@ -154,7 +204,7 @@ def get_ssid(iface: Optional[str]) -> Optional[str]:
     """Nome da rede WiFi conectada. Best-effort; None se indisponível."""
     if IS_MAC:
         return _mac_ssid(iface)
-    return _linux_ssid()
+    return _linux_ssid(iface)
 
 
 def _mac_ssid(iface: Optional[str]) -> Optional[str]:
@@ -162,6 +212,12 @@ def _mac_ssid(iface: Optional[str]) -> Optional[str]:
         out = _run(["networksetup", "-getairportnetwork", iface])
         # "Current Wi-Fi Network: MinhaRede"
         m = re.search(r"Current Wi-Fi Network:\s*(.+)", out)
+        if m:
+            return m.group(1).strip()
+        # macOS 14+ esconde o SSID de várias APIs sem permissão de localização;
+        # o resumo do ipconfig ainda o expõe, sem sudo.
+        out = _run(["ipconfig", "getsummary", iface])
+        m = re.search(r"^\s*SSID\s*:\s*(.+)$", out, re.MULTILINE)
         if m:
             return m.group(1).strip()
     # Fallback: system_profiler (mais lento, mas robusto em macOS novo)
@@ -172,7 +228,7 @@ def _mac_ssid(iface: Optional[str]) -> Optional[str]:
     return None
 
 
-def _linux_ssid() -> Optional[str]:
+def _linux_ssid(iface: Optional[str] = None) -> Optional[str]:
     if shutil.which("iwgetid"):
         out = _run(["iwgetid", "-r"]).strip()
         if out:
@@ -182,6 +238,45 @@ def _linux_ssid() -> Optional[str]:
         for line in out.splitlines():
             if line.startswith("yes:"):
                 return line.split(":", 1)[1].strip() or None
+    # `iw` funciona em adaptadores USB fora do NetworkManager (ex.: wlx...),
+    # onde iwgetid/nmcli costumam não responder.
+    if iface and shutil.which("iw"):
+        out = _run(["iw", "dev", iface, "link"])
+        m = re.search(r"^\s*SSID:\s*(.+)$", out, re.MULTILINE)
+        if m:
+            return m.group(1).strip() or None
+    if iface and shutil.which("wpa_cli"):
+        out = _run(["wpa_cli", "-i", iface, "status"])
+        m = re.search(r"^ssid=(.+)$", out, re.MULTILINE)
+        if m:
+            return m.group(1).strip() or None
+    return None
+
+
+# --------------------------------------------------------------------------- #
+# MAC da interface local
+# --------------------------------------------------------------------------- #
+def get_interface_mac(iface: Optional[str]) -> Optional[str]:
+    """MAC da própria interface. A tabela ARP nunca lista a máquina local."""
+    if not iface:
+        return None
+    if IS_LINUX:
+        try:
+            with open(f"/sys/class/net/{iface}/address", encoding="utf-8") as fh:
+                mac = fh.read().strip()
+            if mac:
+                return mac.lower()
+        except OSError:
+            pass
+        if shutil.which("ip"):
+            out = _run(["ip", "link", "show", iface])
+            m = re.search(r"link/ether\s+([0-9a-fA-F:]{17})", out)
+            if m:
+                return m.group(1).lower()
+    out = _run(["ifconfig", iface])
+    m = re.search(r"\bether\s+([0-9a-fA-F:]{17})", out)
+    if m:
+        return m.group(1).lower()
     return None
 
 

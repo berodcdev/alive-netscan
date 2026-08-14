@@ -94,6 +94,8 @@ pkg_install() {
 # --------------------------------------------------------------------------- #
 PYBIN=""
 
+CANDIDATES="python3.13 python3.12 python3.11 python3.10 python3 python3.14 python3.9"
+
 # Um Python é "saudável" se stdlib essencial (pyexpat/ssl/ctypes) carrega. Algumas
 # instalações do Homebrew ficam quebradas (ex.: symbol libexpat), e o pipx herdaria
 # o problema — então escolhemos explicitamente um interpretador que funcione.
@@ -101,11 +103,60 @@ _python_healthy() {
   "$1" -c "import pyexpat, ssl, ctypes, venv" >/dev/null 2>&1
 }
 
+# No Debian/Ubuntu o módulo `venv` existe na stdlib, mas o `ensurepip` vem num
+# pacote separado (pythonX.Y-venv). Sem ele, `python -m venv` falha na hora de
+# instalar o pip — então o ensurepip entra no teste de saúde.
+_python_has_ensurepip() {
+  "$1" -c "import ensurepip" >/dev/null 2>&1
+}
+
+# Versão "X.Y" do interpretador (usada para achar o pacote -venv correto).
+_python_ver() {
+  "$1" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || echo ""
+}
+
+# PYBIN = Python completo (com ensurepip). PYBIN_BARE = saudável mas sem ensurepip.
+PYBIN_BARE=""
+
 pick_python() {
-  local c
-  for c in python3.13 python3.12 python3.11 python3.10 python3 python3.14 python3.9; do
-    if command -v "$c" >/dev/null 2>&1 && _python_healthy "$c"; then
-      PYBIN="$(command -v "$c")"
+  local c p
+  PYBIN=""; PYBIN_BARE=""
+  for c in $CANDIDATES; do
+    command -v "$c" >/dev/null 2>&1 || continue
+    p="$(command -v "$c")"
+    _python_healthy "$p" || continue
+    if _python_has_ensurepip "$p"; then
+      PYBIN="$p"
+      return 0
+    fi
+    [ -z "$PYBIN_BARE" ] && PYBIN_BARE="$p"
+  done
+  return 1
+}
+
+# Tenta instalar o pacote do sistema que fornece o ensurepip para $1.
+# Só tenta uma vez por execução (apt-get update é lento).
+VENV_SUPPORT_TRIED=0
+install_venv_support() {
+  local py="$1" ver pkgs p
+  [ "$VENV_SUPPORT_TRIED" = "1" ] && return 1
+  VENV_SUPPORT_TRIED=1
+  ver="$(_python_ver "$py")"
+  case "$PKG" in
+    apt)         pkgs="python${ver}-venv python3-venv" ;;
+    dnf|yum)     pkgs="python3-pip python${ver}-pip" ;;
+    zypper)      pkgs="python3-pip" ;;
+    pacman)      pkgs="python-pip" ;;
+    *)           return 1 ;;
+  esac
+  # Pedir a senha do sudo aqui, com prompt visível — abaixo a saída é silenciada.
+  if [ -n "$SUDO" ]; then
+    $SUDO -v || { warn "sem sudo; instale manualmente e rode de novo."; return 1; }
+  fi
+  for p in $pkgs; do
+    info "tentando instalar ${BOLD}$p${RESET} (suporte a venv/pip)..."
+    if pkg_install "$p" >/dev/null 2>&1; then
+      ok "$p instalado."
       return 0
     fi
   done
@@ -118,16 +169,37 @@ ensure_python() {
     ok "usando: $PYBIN ($("$PYBIN" --version 2>&1))"
     return
   fi
-  warn "nenhum Python 3 saudável encontrado; tentando instalar..."
-  if [ "$PKG" = "brew" ]; then pkg_install python
-  elif [ "$PKG" = "pacman" ]; then pkg_install python
-  else pkg_install python3; fi || true
-  if pick_python; then
-    ok "usando: $PYBIN ($("$PYBIN" --version 2>&1))"
+
+  # Achamos um Python saudável, mas sem ensurepip: instalar o pacote que falta.
+  if [ -n "$PYBIN_BARE" ]; then
+    warn "$PYBIN_BARE não tem o módulo ensurepip (necessário para criar o venv)."
+    if [ -n "$PKG" ] && install_venv_support "$PYBIN_BARE" && pick_python; then
+      ok "usando: $PYBIN ($("$PYBIN" --version 2>&1))"
+      return
+    fi
+  else
+    warn "nenhum Python 3 saudável encontrado; tentando instalar..."
+    if [ "$PKG" = "brew" ] || [ "$PKG" = "pacman" ]; then pkg_install python || true
+    else pkg_install python3 || true; fi
+    if pick_python; then
+      ok "usando: $PYBIN ($("$PYBIN" --version 2>&1))"
+      return
+    fi
+  fi
+
+  # Último recurso: seguir com o Python sem ensurepip; o venv será criado com
+  # --without-pip e o pip vem do get-pip.py (ver create_venv).
+  if [ -n "$PYBIN_BARE" ]; then
+    PYBIN="$PYBIN_BARE"
+    warn "seguindo com $PYBIN — vou tentar instalar o pip manualmente no venv."
     return
   fi
+
   err "não encontrei um Python 3 funcional. Instale/repare o Python 3 e rode de novo."
-  [ "$PKG" = "brew" ] && err "dica: 'brew reinstall python@3.13' costuma resolver instalações quebradas."
+  case "$PKG" in
+    brew) err "dica: 'brew reinstall python@3.13' costuma resolver instalações quebradas." ;;
+    apt)  err "dica: sudo apt install python3 python3-venv" ;;
+  esac
   exit 1
 }
 
@@ -173,14 +245,66 @@ maybe_install_nmap() {
   else warn "não consegui instalar o nmap; o alive seguirá com ping sweep."; fi
 }
 
+# Baixa o pip para um venv criado com --without-pip (get-pip.py oficial).
+bootstrap_pip() {
+  local url="https://bootstrap.pypa.io/get-pip.py"
+  local tmp="${TMPDIR:-/tmp}/alive-get-pip.$$.py"
+  info "instalando o pip no venv via get-pip.py..."
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$url" -o "$tmp" 2>/dev/null || return 1
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO "$tmp" "$url" 2>/dev/null || return 1
+  else
+    return 1
+  fi
+  "$VENV_DIR/bin/python" "$tmp" --quiet >/dev/null 2>&1 || { rm -f "$tmp"; return 1; }
+  rm -f "$tmp"
+  ok "pip instalado no venv."
+}
+
+create_venv() {
+  info "criando ambiente isolado em ${BOLD}$VENV_DIR${RESET}"
+  rm -rf "$VENV_DIR"
+  if "$PYBIN" -m venv "$VENV_DIR" >/dev/null 2>&1 \
+     && [ -x "$VENV_DIR/bin/python" ] \
+     && "$VENV_DIR/bin/python" -m pip --version >/dev/null 2>&1; then
+    return 0
+  fi
+
+  # Falhou (tipicamente ensurepip ausente no Debian/Ubuntu): tentar instalar o
+  # pacote do sistema e repetir uma vez.
+  warn "não consegui criar o venv com pip na primeira tentativa."
+  if [ -n "$PKG" ] && install_venv_support "$PYBIN"; then
+    rm -rf "$VENV_DIR"
+    if "$PYBIN" -m venv "$VENV_DIR" >/dev/null 2>&1 \
+       && "$VENV_DIR/bin/python" -m pip --version >/dev/null 2>&1; then
+      return 0
+    fi
+  fi
+
+  # Último recurso: venv sem pip + get-pip.py.
+  rm -rf "$VENV_DIR"
+  if "$PYBIN" -m venv --without-pip "$VENV_DIR" >/dev/null 2>&1 && bootstrap_pip; then
+    return 0
+  fi
+
+  err "falha ao criar o venv."
+  local ver; ver="$(_python_ver "$PYBIN")"
+  case "$PKG" in
+    apt) err "instale o suporte a venv e rode de novo: sudo apt install python${ver}-venv" ;;
+    dnf|yum) err "instale o pip e rode de novo: sudo $PKG install python3-pip" ;;
+    brew) err "dica: brew reinstall python@3.13" ;;
+    *)    err "garanta que '$PYBIN -m venv' e o pip funcionem e rode de novo." ;;
+  esac
+  exit 1
+}
+
 install_alive() {
   step "Instalando o alive"
   local dir
   dir="$(cd "$(dirname "$0")" && pwd)"
 
-  info "criando ambiente isolado em ${BOLD}$VENV_DIR${RESET}"
-  rm -rf "$VENV_DIR"
-  "$PYBIN" -m venv "$VENV_DIR" || { err "falha ao criar o venv."; exit 1; }
+  create_venv
 
   info "instalando dependências (pode levar um minuto)..."
   "$VENV_DIR/bin/python" -m pip install --quiet --upgrade pip >/dev/null 2>&1 || true

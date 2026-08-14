@@ -7,7 +7,7 @@ Output assets/demo.gif
 Set Shell "bash"
 Set FontSize 15
 Set Width 1240
-Set Height 650
+Set Height 790
 Set Padding 24
 Set TypingSpeed 55ms
 Set Theme { "name": "alive-matrix", "background": "#0a0d0a", "foreground": "#c8e6c9", "black": "#0a0d0a", "red": "#ff5f5f", "green": "#39ff14", "yellow": "#f4f465", "blue": "#5fafff", "magenta": "#d787ff", "cyan": "#5fffd7", "white": "#e8f5e9", "brightBlack": "#5c6d5c", "brightRed": "#ff8787", "brightGreen": "#8bff6b", "brightYellow": "#ffff87", "brightBlue": "#87d7ff", "brightMagenta": "#ffafff", "brightCyan": "#afffff", "brightWhite": "#ffffff", "cursor": "#39ff14", "selection": "#1f3d1f" }
