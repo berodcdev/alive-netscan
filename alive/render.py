@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from typing import Optional
 
 from rich.box import SQUARE
@@ -72,6 +73,7 @@ def print_summary(
     method: str,
     diff: Optional[object] = None,
     findings: Optional[list] = None,
+    passive: bool = False,
 ) -> None:
     """Imprime o resumo da rede em formato de saída de ferramenta de recon."""
     console.print()
@@ -115,10 +117,13 @@ def print_summary(
         _kv("[*]", "green", "publico", pub)
 
     _kv("[*]", "green", "metodo", f"[dim]{method}[/dim]")
-    silent = sum(1 for h in hosts if h.get("via") == "arp")
+    silent = 0 if passive else sum(1 for h in hosts if h.get("via") == "arp")
     counted = f"[bold bright_green]{len(hosts)}[/bold bright_green]"
     if silent:
         counted += f" [dim]({silent} só via ARP — ignoram ping)[/dim]"
+    elif passive:
+        # Em modo passivo ninguém foi pingado: dizer "ignoram ping" seria falso.
+        counted += " [dim](do cache ARP — só quem já conversou com esta máquina)[/dim]"
     _kv("[+]", "bright_green", "hosts vivos", counted)
 
     # Contagem por tipo: dá a leitura da rede em uma linha.
@@ -302,6 +307,13 @@ def print_findings(items: list, limit: int = 8) -> None:
             Text.from_markup(f"  [{f.color}]{mark} {rotulo:<5}[/{f.color}] "),
             Text.from_markup(escape(f.message)),
         )
+        if getattr(f, "fix", None):
+            # A seta entra no cabeçalho para que a continuação alinhe sob o
+            # texto da ação, e não sob a seta.
+            _print_hanging(
+                Text(" " * 12 + "→ ", style="dim"),
+                Text.from_markup(f"[dim]{escape(f.fix)}[/dim]"),
+            )
     if len(items) > limit:
         console.print(f"  [dim]... e mais {len(items) - limit}[/dim]")
     console.print()
@@ -483,9 +495,19 @@ def render_table(
     console.print()
 
 
-def to_json(hosts: list[dict], net: NetInfo, findings: Optional[list] = None) -> str:
-    """Serializa o resultado em JSON."""
-    payload = {
+def to_json(
+    hosts: list[dict],
+    net: NetInfo,
+    findings: Optional[list] = None,
+    *,
+    indent: Optional[int] = 2,
+    extra: Optional[dict] = None,
+) -> str:
+    """Serializa o resultado em JSON. ``indent=None`` produz uma linha só."""
+    payload: dict = {}
+    if extra:
+        payload.update(extra)
+    payload.update({
         "network": {
             "ssid": net.ssid,
             "interface": net.interface,
@@ -523,11 +545,45 @@ def to_json(hosts: list[dict], net: NetInfo, findings: Optional[list] = None) ->
             for h in hosts
         ],
         "findings": [
-            {"severity": f.severity, "ip": f.ip, "message": f.message}
+            {"severity": f.severity, "ip": f.ip, "message": f.message,
+             "fix": getattr(f, "fix", None)}
             for f in (findings or [])
         ],
-    }
-    return json.dumps(payload, ensure_ascii=False, indent=2)
+    })
+    return json.dumps(payload, ensure_ascii=False, indent=indent)
+
+
+def watch_line(
+    cycle: int, hosts: list[dict], net: NetInfo, findings: Optional[list], diff: object
+) -> str:
+    """Uma linha NDJSON por ciclo do --watch: o estado e o que mudou nele.
+
+    ``--watch --json`` antes não emitia nada: o laço de monitoramento nunca
+    serializava, o que deixava o modo inútil para automação.
+    """
+    eventos: list[dict] = [
+        {
+            "event": "entrou",
+            "ip": h["ip"],
+            "name": clean_hostname(h.get("name")),
+            "type": h["device"].label,
+        }
+        for h in hosts
+        if h.get("is_new")
+    ]
+    eventos += [
+        {
+            "event": "saiu",
+            "ip": g.get("ip"),
+            "name": clean_hostname(g.get("name")),
+            "type": g.get("type"),
+        }
+        for g in (getattr(diff, "gone", None) or [])
+    ]
+    return to_json(
+        hosts, net, findings, indent=None,
+        extra={"cycle": cycle, "time": time.time(), "events": eventos},
+    )
 
 
 def print_events(hosts: list[dict], diff: Optional[object]) -> None:

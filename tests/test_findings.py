@@ -114,3 +114,42 @@ class TestShortNotes:
 
     def test_sem_nota(self):
         assert findings.short_notes(host("192.168.0.9", services={"http"})) == []
+
+
+class TestAcaoRecomendada:
+    def test_servico_arriscado_diz_o_que_fazer(self):
+        h = host("192.168.0.88", services={"telnet"})
+        (achado,) = findings.collect([h])
+        assert achado.fix and "192.168.0.88" in achado.fix
+
+    def test_redirecionamento_diz_o_que_fazer(self):
+        wan = {"port_mappings": [{"external_port": "80", "internal_port": "80",
+                                  "internal_client": "192.168.0.9", "protocol": "TCP"}]}
+        (achado,) = findings.collect([], wan)
+        assert "painel do roteador" in achado.fix
+
+    def test_achado_informativo_nao_tem_acao(self):
+        """Host só em ARP não tem ação óbvia — inventar uma seria ruído."""
+        (achado,) = findings.collect([host("192.168.0.9", via="arp")])
+        assert achado.fix is None
+
+    def test_toda_acao_cabe_numa_linha(self):
+        for _sev, _texto, fix in findings._RISKY_SERVICES.values():
+            assert len(fix) <= 80, fix
+
+
+class TestModoPassivo:
+    def test_nao_reporta_descoberta_por_arp(self):
+        """Em modo passivo todo host vem do ARP: reportar isso seria mentir."""
+        hosts = [host("192.168.0.9", via="arp", arp_state="confirmado"),
+                 host("192.168.0.10", via="arp", arp_state="stale")]
+        assert findings.collect(hosts, passive=True) == []
+
+    def test_servico_arriscado_continua_valendo(self):
+        h = host("192.168.0.88", via="arp", services={"telnet"})
+        achados = findings.collect([h], passive=True)
+        assert len(achados) == 1 and achados[0].severity == "alto"
+
+    def test_sem_passive_reporta_normalmente(self):
+        hosts = [host("192.168.0.9", via="arp", arp_state="confirmado")]
+        assert len(findings.collect(hosts)) == 1

@@ -79,10 +79,11 @@ class TestSortHosts:
         ordenado = cli._sort_hosts(HOSTS, "name")
         assert [h["name"] for h in ordenado] == ["alfa", "zebra", None]
 
-    def test_por_tipo(self):
+    def test_por_tipo_segue_prioridade_nao_alfabeto(self):
+        """Infraestrutura primeiro; alfabética não diz nada sobre a rede."""
         ordenado = cli._sort_hosts(HOSTS, "type")
         assert [h["device"].label for h in ordenado] == \
-            ["CELULAR", "ROTEADOR", "TV/STREAM"]
+            ["ROTEADOR", "CELULAR", "TV/STREAM"]
 
 
 class TestMethodLabel:
@@ -159,3 +160,51 @@ def test_demo_em_json_e_valido(capsys):
     dados = json.loads(capsys.readouterr().out)
     assert len(dados["hosts"]) == 12
     assert dados["network"]["ssid"] == "CASA-5G"
+
+
+class TestPassive:
+    def test_desliga_tudo_que_manda_pacote(self):
+        args = cli.build_parser().parse_args(["--passive"])
+        cli._apply_passive(args)
+        assert args.no_nmap and args.no_ports and args.no_netbios and args.no_upnp
+
+    def test_mantem_o_mdns(self):
+        """mDNS é multicast: o mesmo tráfego que a rede já troca sozinha."""
+        args = cli.build_parser().parse_args(["--passive"])
+        cli._apply_passive(args)
+        assert not args.no_mdns
+
+    def test_metodo_diz_que_foi_passivo(self):
+        args = cli.build_parser().parse_args(["--passive"])
+        cli._apply_passive(args)
+        rotulo = cli._method_label(args, use_nmap=False)
+        assert "passivo" in rotulo and "ping" not in rotulo
+
+    def test_sem_passive_nao_mexe(self):
+        args = cli.build_parser().parse_args([])
+        cli._apply_passive(args)
+        assert not args.no_nmap
+
+
+class TestExitCode:
+    def _achados(self, *severidades):
+        from alive.findings import Finding
+        return [Finding(s, "1.2.3.4", "x") for s in severidades]
+
+    def test_sem_fail_on_sempre_zero(self):
+        assert cli._exit_code(self._achados("alto"), None) == 0
+
+    def test_achado_no_nivel_pedido(self):
+        assert cli._exit_code(self._achados("alto"), "alto") == 3
+
+    def test_achado_pior_que_o_pedido(self):
+        assert cli._exit_code(self._achados("alto"), "medio") == 3
+
+    def test_achado_mais_brando_que_o_pedido(self):
+        assert cli._exit_code(self._achados("baixo"), "alto") == 0
+
+    def test_sem_achado_nenhum(self):
+        assert cli._exit_code([], "baixo") == 0
+
+    def test_fail_on_baixo_pega_qualquer_coisa(self):
+        assert cli._exit_code(self._achados("baixo"), "baixo") == 3

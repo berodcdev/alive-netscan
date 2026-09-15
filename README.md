@@ -68,15 +68,27 @@ alive -n 192.168.0.0/24    # varre uma subrede específica
 alive -i wlan0             # força uma interface
 alive --watch              # monitora e avisa quem entra e sai (a cada 30s)
 alive --watch 60           # monitorando a cada 60 segundos
-alive --sort type          # agrupa por tipo de dispositivo
-alive -n 10.0.0.0/16 --force  # redes acima de /20 exigem --force
+alive --passive            # não manda pacote nenhum: só o cache ARP + mDNS
+alive --sort type          # agrupa por tipo, infraestrutura primeiro
 alive --json > recon.json  # saída em JSON para automação
+```
+
+Para automação e monitoramento:
+
+```bash
+alive --watch --json          # NDJSON: uma linha por ciclo, com os eventos
+alive --fail-on alto          # sai com código 3 se houver achado grave (cron/CI)
+alive -n 10.0.0.0/16 --force  # redes acima de /20 exigem --force
 ```
 
 > 💡 Veja a saída sem escanear nada: **`alive --demo`** (é o que aparece no GIF acima).
 
 Cada sonda pode ser desligada: `--no-nmap`, `--no-mdns`, `--no-vendor`, `--no-ports`,
 `--no-upnp`, `--no-netbios`, `--no-history`.
+
+**`--passive`** desliga todas de uma vez: nenhum pacote sai daqui para os hosts. Sobram
+a tabela ARP que o sistema já mantém e a escuta de mDNS (multicast, o tráfego que a rede
+já troca sozinha). Cobre menos, mas não deixa rastro em IDS nem acorda aparelho dormindo.
 
 ## Como funciona
 
@@ -89,7 +101,7 @@ Cada sonda pode ser desligada: `--no-nmap`, `--no-mdns`, `--no-vendor`, `--no-po
 | **Fingerprint** | fabricante por OUI (offline) + ~22 portas TCP que identificam o aparelho |
 | **Classificação** | combina modelo, fabricante, serviços, portas, UPnP e hostname — marca `?` quando é palpite |
 | **Histórico** | compara com o scan anterior: marca quem é `NOVO`, quem saiu e há quanto tempo cada um é conhecido |
-| **Achados** | serviços expostos, MAC duplicado e os redirecionamentos de porta ativos no roteador |
+| **Achados** | serviços expostos, MAC duplicado e os redirecionamentos de porta ativos no roteador — cada um com o que fazer a respeito |
 
 Sem `nmap` ou sem `sudo`, o `alive` ainda funciona — apenas pode não ver aparelhos que
 ignoram ping. Instalar `nmap` e/ou rodar com `sudo` melhora a cobertura de MACs.

@@ -131,7 +131,9 @@ class TestToJson:
         from alive.findings import Finding
         net = NetInfo(interface=None, ip=None, network=None, gateway=None, ssid=None)
         dados = json.loads(render.to_json([], net, [Finding("alto", "1.2.3.4", "x")]))
-        assert dados["findings"] == [{"severity": "alto", "ip": "1.2.3.4", "message": "x"}]
+        assert dados["findings"] == [
+            {"severity": "alto", "ip": "1.2.3.4", "message": "x", "fix": None}
+        ]
 
 
 NOMES_HOSTIS = ["[/bold]", "[blink]x[/]", "[red on white]", "[[", "]]"]
@@ -314,3 +316,69 @@ class TestColunaCompacta:
         saida = self._linhas(host(vendor="Samsung Electronics"), monkeypatch,
                              largura=170)
         assert "FABRICANTE" in saida and "SERVIÇOS" in saida
+
+
+class TestWatchLine:
+    """Regressão: --watch --json não emitia uma linha sequer."""
+
+    def _net(self):
+        return NetInfo(interface="wlan0", ip=None,
+                       network=ipaddress.ip_network("192.168.0.0/24"),
+                       gateway=None, ssid="CASA")
+
+    def test_uma_linha_por_ciclo(self):
+        linha = render.watch_line(3, [host()], self._net(), [], history.Diff())
+        assert "\n" not in linha
+        assert json.loads(linha)["cycle"] == 3
+
+    def test_evento_de_entrada(self):
+        h = host("192.168.0.55", name="novo.local", is_new=True)
+        dados = json.loads(render.watch_line(1, [h], self._net(), [], history.Diff()))
+        assert dados["events"] == [
+            {"event": "entrou", "ip": "192.168.0.55", "name": "novo",
+             "type": "COMPUTADOR"}
+        ]
+
+    def test_evento_de_saida(self):
+        diff = history.Diff(gone=[{"ip": "192.168.0.9", "name": "pc.local",
+                                   "type": "COMPUTADOR"}])
+        dados = json.loads(render.watch_line(2, [], self._net(), [], diff))
+        assert dados["events"][0]["event"] == "saiu"
+        assert dados["events"][0]["name"] == "pc"
+
+    def test_carrega_o_estado_completo(self):
+        dados = json.loads(render.watch_line(1, [host()], self._net(), [], history.Diff()))
+        assert dados["network"]["cidr"] == "192.168.0.0/24"
+        assert len(dados["hosts"]) == 1
+        assert isinstance(dados["time"], float)
+
+
+class TestFindingFix:
+    def test_acao_aparece_abaixo_da_mensagem(self, captura):
+        from alive.findings import Finding
+        render.print_findings([Finding("alto", "1.2.3.4", "telnet aberto",
+                                       "desative o telnet")])
+        assert "→ desative o telnet" in captura.getvalue()
+
+    def test_achado_sem_acao_nao_imprime_seta(self, captura):
+        from alive.findings import Finding
+        render.print_findings([Finding("baixo", None, "só informativo")])
+        assert "→" not in captura.getvalue()
+
+
+class TestResumoPassivo:
+    def _net(self):
+        return NetInfo(interface="wlan0", ip=None,
+                       network=ipaddress.ip_network("192.168.0.0/24"),
+                       gateway=None, ssid="CASA")
+
+    def test_nao_diz_que_ignoram_ping(self, captura):
+        """Em modo passivo nada foi pingado — a frase seria falsa."""
+        render.print_summary(self._net(), [host(via="arp")], method="ARP (passivo)",
+                             passive=True)
+        assert "ignoram ping" not in captura.getvalue()
+        assert "cache ARP" in captura.getvalue()
+
+    def test_modo_normal_mantem_a_frase(self, captura):
+        render.print_summary(self._net(), [host(via="arp")], method="ping + ARP")
+        assert "ignoram ping" in captura.getvalue()

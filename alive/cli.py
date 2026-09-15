@@ -44,8 +44,11 @@ EPILOG = """\
   [green]alive -n 192.168.0.0/24[/green]        [dim]# varre uma subrede específica[/dim]
   [green]alive --watch[/green]                  [dim]# monitora e avisa quem entra e sai[/dim]
   [green]alive --watch 60[/green]               [dim]# monitorando a cada 60 segundos[/dim]
+  [green]alive --passive[/green]                [dim]# sem mandar pacote: só cache ARP + mDNS[/dim]
   [green]alive --sort type[/green]              [dim]# agrupa por tipo de dispositivo[/dim]
   [green]alive --json > recon.json[/green]      [dim]# exporta o resultado em JSON[/dim]
+  [green]alive --watch --json[/green]           [dim]# NDJSON: uma linha por ciclo[/dim]
+  [green]alive --fail-on alto[/green]           [dim]# código 3 se houver achado grave[/dim]
 
 [bold green]nota[/bold green]
   Instale o [bold]nmap[/bold] e/ou rode com [bold]sudo[/bold] para uma varredura mais completa.
@@ -122,6 +125,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="modo rápido: pula mDNS, fabricante e as sondas (portas/UPnP/NetBIOS).",
     )
     veloc.add_argument(
+        "--passive", action="store_true",
+        help="modo passivo: nenhum pacote para os hosts [dim](só tabela ARP + escuta mDNS)[/dim].",
+    )
+    veloc.add_argument(
         "--no-nmap", action="store_true",
         help="não usar o nmap, mesmo instalado (força o ping sweep).",
     )
@@ -176,6 +183,10 @@ def build_parser() -> argparse.ArgumentParser:
     saida.add_argument(
         "--sort", choices=("ip", "name", "type"), default="ip",
         help="como ordenar a tabela: ip, name ou type [dim](padrão: ip)[/dim].",
+    )
+    saida.add_argument(
+        "--fail-on", choices=("alto", "medio", "baixo"), default=None, metavar="NÍVEL",
+        help="sair com código 3 se houver achado deste nível ou pior [dim](cron/CI)[/dim].",
     )
     saida.add_argument(
         "-j", "--json", action="store_true",
@@ -234,8 +245,40 @@ def _sort_hosts(hosts: list[dict], key: str) -> list[dict]:
     if key == "name":
         return sorted(hosts, key=lambda h: (h.get("name") or "~").lower())
     if key == "type":
-        return sorted(hosts, key=lambda h: h["device"].label)
+        return sorted(
+            hosts,
+            key=lambda h: (
+                classify.TYPE_RANK.get(h["device"].label, 99),
+                ipaddress.ip_address(h["ip"]),
+            ),
+        )
     return sorted(hosts, key=lambda h: ipaddress.ip_address(h["ip"]))
+
+
+def _apply_passive(args: argparse.Namespace) -> None:
+    """--passive: nenhum pacote unicast sai daqui para os hosts.
+
+    Sobra a tabela ARP que o sistema já mantém e a escuta de mDNS — tráfego
+    multicast que a rede já troca sozinha. Sem ping, nmap, porta, NetBIOS nem
+    M-SEARCH. Cobre menos, mas não deixa rastro em IDS nem acorda aparelho.
+    """
+    if not getattr(args, "passive", False):
+        return
+    args.no_nmap = True
+    args.no_ports = True
+    args.no_netbios = True
+    args.no_upnp = True
+
+
+def _exit_code(found: list, fail_on: Optional[str]) -> int:
+    """3 quando existe achado no nível pedido ou pior — para cron e CI."""
+    if not fail_on:
+        return 0
+    teto = findings.SEVERITY_ORDER[fail_on]
+    pior = min(
+        (findings.SEVERITY_ORDER.get(f.severity, 9) for f in found), default=9
+    )
+    return 3 if pior <= teto else 0
 
 
 def _apply_fast(args: argparse.Namespace) -> None:
@@ -254,6 +297,7 @@ def run(args: argparse.Namespace) -> int:
         return _run_demo(args)
 
     _apply_fast(args)
+    _apply_passive(args)
 
     # 1) Descobrir a rede local.
     netinfo = net.discover()
@@ -307,15 +351,21 @@ def run(args: argparse.Namespace) -> int:
     if args.json:
         print(render.to_json(hosts, netinfo, found))
     else:
-        render.print_summary(netinfo, hosts, method=method, diff=diff, findings=found)
+        render.print_summary(netinfo, hosts, method=method, diff=diff,
+                             findings=found, passive=args.passive)
         render.render_table(hosts, netinfo, found)
         render.print_findings(found)
         render.print_footer(duracao, max(1, network.num_addresses - 2), hosts)
-    return 0
+    return _exit_code(found, args.fail_on)
 
 
 def _method_label(args: argparse.Namespace, use_nmap: bool) -> str:
     """Descreve as técnicas realmente usadas nesta execução."""
+    if getattr(args, "passive", False):
+        parts = ["ARP"]
+        if not args.no_mdns:
+            parts.append("mDNS")
+        return " + ".join(parts) + " (passivo)"
     parts = ["nmap"] if use_nmap else []
     parts += ["ping sweep", "ARP"]
     if not args.no_mdns:
@@ -343,7 +393,8 @@ def _collect(
     # 1) Hosts vivos (barra de progresso, exceto em JSON/watch silencioso).
     total = max(1, network.num_addresses - 2)
     scan_kwargs = {
-        "use_nmap": use_nmap, "timeout": args.timeout, "workers": args.workers,
+        "use_nmap": use_nmap, "use_ping": not getattr(args, "passive", False),
+        "timeout": args.timeout, "workers": args.workers,
         "local_ip": netinfo.ip, "gateway": netinfo.gateway,
     }
     if quiet:
@@ -469,7 +520,9 @@ def _collect(
         history.save(hosts, netinfo.cidr)
 
     # 6) Achados: o que merece atenção no que foi encontrado.
-    found = findings.collect(hosts, netinfo.wan)
+    found = findings.collect(
+        hosts, netinfo.wan, passive=bool(getattr(args, "passive", False))
+    )
     for h in hosts:
         h["notes"] = findings.short_notes(h)
     return hosts, diff, found
@@ -518,21 +571,31 @@ def _run_watch(
 ) -> int:
     """Monitora a rede em ciclos, reportando entradas e saídas."""
     interval = max(5.0, float(args.watch))
-    render.print_banner()
-    if note:
-        render.warn(note)
-    render.info(
-        f"monitorando [bold green]{netinfo.cidr}[/bold green] "
-        f"[dim](ciclo de {interval:.0f}s · {method} · ctrl-c para sair)[/dim]"
-    )
+    # Com --json o monitoramento vira NDJSON: uma linha por ciclo, com o estado
+    # e os eventos daquele ciclo. Nada de banner nem spinner poluindo a saída.
+    if not args.json:
+        render.print_banner()
+        if note:
+            render.warn(note)
+        render.info(
+            f"monitorando [bold green]{netinfo.cidr}[/bold green] "
+            f"[dim](ciclo de {interval:.0f}s · {method} · ctrl-c para sair)[/dim]"
+        )
     cycle = 0
     while True:
         cycle += 1
-        hosts, diff, found = _collect(args, netinfo, use_nmap=use_nmap, quiet=False)
+        hosts, diff, found = _collect(
+            args, netinfo, use_nmap=use_nmap, quiet=args.json
+        )
+        if args.json:
+            print(render.watch_line(cycle, hosts, netinfo, found, diff), flush=True)
+            time.sleep(interval)
+            continue
         stamp = time.strftime("%H:%M:%S")
         changed = any(h.get("is_new") for h in hosts) or bool(diff.gone)
         if cycle == 1:
-            render.print_summary(netinfo, hosts, method=method, diff=diff, findings=found)
+            render.print_summary(netinfo, hosts, method=method, diff=diff,
+                                 findings=found, passive=args.passive)
             render.render_table(hosts, netinfo, found)
             render.print_findings(found)
         elif changed:
@@ -622,11 +685,12 @@ def _run_demo(args: argparse.Namespace) -> int:
         first_run=False,
     )
 
+    hosts = _sort_hosts(hosts, args.sort)
     demo_findings = findings.collect(hosts, demo_net.wan)
 
     if args.json:
         print(render.to_json(hosts, demo_net, demo_findings))
-        return 0
+        return _exit_code(demo_findings, args.fail_on)
     render.print_banner()
     render.info("[yellow]modo demonstração[/yellow] [dim](dados fictícios)[/dim]")
     render.print_summary(
@@ -637,7 +701,7 @@ def _run_demo(args: argparse.Namespace) -> int:
     )
     render.render_table(hosts, demo_net, demo_findings)
     render.print_findings(demo_findings)
-    return 0
+    return _exit_code(demo_findings, args.fail_on)
 
 
 def _local_hostname() -> Optional[str]:

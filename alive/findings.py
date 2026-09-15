@@ -11,16 +11,43 @@ from dataclasses import dataclass
 from typing import Optional
 
 # Serviços em texto puro ou de controle remoto que não deveriam estar abertos
-# numa rede doméstica. {serviço: (severidade, explicação)}
-_RISKY_SERVICES: dict[str, tuple[str, str]] = {
-    "telnet": ("alto", "telnet (23) aberto — login e dados trafegam em texto puro"),
-    "ftp": ("medio", "FTP (21) aberto — credenciais em texto puro"),
-    "adb": ("alto", "ADB (5555) exposto — qualquer um na rede instala apps neste aparelho"),
-    "rtsp": ("alto", "RTSP (554) aberto — o vídeo pode ser acessado por quem está na rede"),
-    "vnc": ("alto", "VNC (5900) aberto — controle total da tela se a senha for fraca"),
-    "rdp": ("medio", "RDP (3389) aberto — alvo comum de força bruta"),
-    "mqtt": ("baixo", "MQTT (1883) sem TLS — comandos de automação em texto puro"),
-    "dvr": ("medio", "porta de DVR (37777) aberta — interface proprietária exposta"),
+# numa rede doméstica. {serviço: (severidade, o que é, o que fazer)}
+#
+# O "o que fazer" existe porque apontar o problema sem dizer a saída deixa o
+# trabalho pela metade: quem roda isso em casa não sabe onde fica a opção.
+_RISKY_SERVICES: dict[str, tuple[str, str, str]] = {
+    "telnet": (
+        "alto", "telnet (23) aberto — login e dados trafegam em texto puro",
+        "desative o telnet no painel do aparelho (http://{ip}); prefira SSH",
+    ),
+    "ftp": (
+        "medio", "FTP (21) aberto — credenciais em texto puro",
+        "desative o FTP ou troque por SFTP/FTPS",
+    ),
+    "adb": (
+        "alto", "ADB (5555) exposto — qualquer um na rede instala apps neste aparelho",
+        "desligue a depuração por rede em Opções do desenvolvedor",
+    ),
+    "rtsp": (
+        "alto", "RTSP (554) aberto — o vídeo pode ser acessado por quem está na rede",
+        "exija senha no RTSP e confirme que a porta não está redirecionada",
+    ),
+    "vnc": (
+        "alto", "VNC (5900) aberto — controle total da tela se a senha for fraca",
+        "use senha forte e acesse por SSH/VPN em vez de expor a porta",
+    ),
+    "rdp": (
+        "medio", "RDP (3389) aberto — alvo comum de força bruta",
+        "restrinja o RDP à VPN e mantenha o NLA ligado",
+    ),
+    "mqtt": (
+        "baixo", "MQTT (1883) sem TLS — comandos de automação em texto puro",
+        "ative TLS (8883) e autenticação no broker",
+    ),
+    "dvr": (
+        "medio", "porta de DVR (37777) aberta — interface proprietária exposta",
+        "troque a senha padrão e mantenha a porta restrita à LAN",
+    ),
 }
 
 SEVERITY_ORDER = {"alto": 0, "medio": 1, "baixo": 2}
@@ -34,6 +61,7 @@ class Finding:
     severity: str  # alto | medio | baixo
     ip: Optional[str]
     message: str
+    fix: Optional[str] = None  # o que fazer a respeito, quando há uma ação clara
 
     @property
     def color(self) -> str:
@@ -51,17 +79,27 @@ def _label(host: dict) -> str:
     return f"{host['ip']} ({name})" if name else host["ip"]
 
 
-def collect(hosts: list[dict], wan: Optional[dict] = None) -> list[Finding]:
-    """Aplica todas as regras e devolve os achados ordenados por severidade."""
+def collect(
+    hosts: list[dict], wan: Optional[dict] = None, *, passive: bool = False
+) -> list[Finding]:
+    """Aplica todas as regras e devolve os achados ordenados por severidade.
+
+    Com ``passive``, o achado de "só respondeu a ARP" é omitido: em modo
+    passivo ninguém foi pingado, então todo host vem do ARP por construção —
+    reportar isso como descoberta seria mentir sobre o que foi verificado.
+    """
     out: list[Finding] = []
 
     for h in hosts:
         services = h.get("services") or set()
-        for svc, (severity, text) in _RISKY_SERVICES.items():
+        for svc, (severity, text, fix) in _RISKY_SERVICES.items():
             if svc in services:
                 # Uma câmera com RTSP é o funcionamento normal dela; o problema é
                 # o serviço estar acessível, então o texto já diz isso.
-                out.append(Finding(severity, h["ip"], f"{_label(h)}: {text}"))
+                out.append(
+                    Finding(severity, h["ip"], f"{_label(h)}: {text}",
+                            fix.format(ip=h["ip"]))
+                )
 
     # MAC repetido em IPs diferentes: bridge, NAT interno, VM — ou spoof.
     by_mac: dict[str, list[dict]] = {}
@@ -77,13 +115,14 @@ def collect(hosts: list[dict], wan: Optional[dict] = None) -> list[Finding]:
                     "medio", group[0]["ip"],
                     f"MAC {mac} responde em {len(group)} IPs ({ips}) — "
                     "bridge, VM ou endereço forjado",
+                    "se você não tem bridge nem VM aqui, investigue o aparelho",
                 )
             )
 
     # Hosts que só apareceram na tabela ARP. O estado do vizinho separa dois
     # casos bem diferentes: confirmado é um aparelho presente que ignora ping;
     # obsoleto é cache que o kernel não revalidou — pode já ter saído da rede.
-    silent = [h for h in hosts if h.get("via") == "arp"]
+    silent = [] if passive else [h for h in hosts if h.get("via") == "arp"]
     confirmed = [h for h in silent if h.get("arp_state") != "stale"]
     stale = [h for h in silent if h.get("arp_state") == "stale"]
     if confirmed:
@@ -112,6 +151,7 @@ def collect(hosts: list[dict], wan: Optional[dict] = None) -> list[Finding]:
                 f"roteador redireciona {m.get('protocol')}/{m.get('external_port')} "
                 f"da internet para {m.get('internal_client')}:{m.get('internal_port')}"
                 f"{desc}",
+                "remova o redirecionamento no painel do roteador se não for proposital",
             )
         )
 

@@ -230,6 +230,7 @@ def scan(
     network: ipaddress.IPv4Network,
     *,
     use_nmap: bool = True,
+    use_ping: bool = True,
     timeout: float = 1.0,
     workers: int = 64,
     progress: Optional[Callable[[], None]] = None,
@@ -251,11 +252,15 @@ def scan(
             alive[ip] = "nmap"
         macs.update(n_macs)
 
-    # Ping sweep sempre roda (rápido, popula ARP, cobre hosts que o nmap perdeu).
-    pinged = ping_sweep(network, timeout=timeout, workers=workers, progress=progress)
-    for ip, info in pinged.items():
-        alive[ip] = "ping"
-        stats[ip] = info
+    # Ping sweep (rápido, popula o ARP, cobre hosts que o nmap perdeu). Em modo
+    # passivo não roda: nenhum pacote sai daqui para os hosts.
+    if use_ping:
+        pinged = ping_sweep(network, timeout=timeout, workers=workers, progress=progress)
+        for ip, info in pinged.items():
+            alive[ip] = "ping"
+            stats[ip] = info
+    elif progress:
+        progress()
 
     # Garantir gateway e host local na lista.
     for extra in (local_ip, gateway):

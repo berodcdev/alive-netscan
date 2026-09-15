@@ -42,6 +42,18 @@ primeira suíte de testes.
   a DETALHE.
 
 ### Adicionado
+- `--passive`: nenhum pacote unicast para os hosts. Sobram a tabela ARP e a
+  escuta de mDNS.
+- `--fail-on {alto,medio,baixo}`: sai com código 3 quando há achado nesse nível
+  ou pior, para cron e CI.
+- `--watch --json` agora emite NDJSON (uma linha por ciclo, com os eventos de
+  entrada e saída). Antes não emitia nada: o laço de monitoramento nunca
+  serializava, o que deixava o modo inútil para automação.
+- Cada achado passa a dizer o que fazer a respeito, não só o que há.
+- `--sort type` ordena por prioridade de leitura da rede (infraestrutura
+  primeiro), não por alfabeto; e o `--demo` passa a respeitar o `--sort`.
+- ONT/CPE de operadora (ZTE, Huawei, Sagemcom, Askey, Arris...) são
+  reconhecidos como equipamento de rede em vez de `DESCONHECIDO`.
 - Suíte de testes (pytest) sobre todo o parsing: MAC, TTL, tabela ARP, saída do
   nmap, NBSTAT, XML UPnP, validação de URL, nomes, fabricantes, histórico,
   achados e matriz de classificação.

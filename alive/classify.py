@@ -35,6 +35,14 @@ GAME = DeviceType("CONSOLE", "bright_green")
 WATCH = DeviceType("WEARABLE", "cyan")
 UNKNOWN = DeviceType("DESCONHECIDO", "bright_black")
 
+# Ordem de leitura da rede com --sort type: infraestrutura primeiro, aparelho
+# pessoal depois, desconhecido por último. Alfabética não diz nada.
+_TYPE_ORDER = (
+    ROUTER, NETDEV, SBC, PRINTER, CAMERA, COMPUTER, PHONE, TV, SPEAKER,
+    GAME, WATCH, IOT, UNKNOWN,
+)
+TYPE_RANK = {d.label: i for i, d in enumerate(_TYPE_ORDER)}
+
 # Serviços que, sozinhos, provam o tipo do aparelho.
 _DECISIVE: list[tuple[tuple[str, ...], DeviceType]] = [
     (("ios",), PHONE),          # porta 62078 (lockdownd): só iPhone/iPad
@@ -51,6 +59,9 @@ _DECISIVE: list[tuple[tuple[str, ...], DeviceType]] = [
 _NET_VENDORS = (
     "tp-link", "mercusys", "d-link", "ubiquiti", "aruba", "mikrotik", "netgear",
     "zyxel", "cisco", "ruckus", "keenetic", "tenda", "intelbras",
+    # ONT/CPE de operadora e os repetidores que vêm junto.
+    "zte", "huawei", "sagemcom", "askey", "arris", "technicolor", "fiberhome",
+    "nokia", "cig", "parks", "datacom", "multilaser",
 )
 
 
