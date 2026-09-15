@@ -75,6 +75,73 @@ need_sudo() {
   fi
 }
 
+# --------------------------------------------------------------------------- #
+# Proteção: nada de instalar como root
+# --------------------------------------------------------------------------- #
+# O alive se instala por usuário: o venv vai para $HOME/.local/share/alive e o
+# comando para $HOME/.local/bin. Sob `sudo`, $HOME vira /root — a instalação
+# "dá certo", mas some para o seu usuário. E o build deixa build/ e *.egg-info/
+# com dono root dentro do repo, o que quebra as reinstalações seguintes com
+# "Cannot update time stamp of directory".
+ensure_not_root() {
+  if [ "$(id -u)" -ne 0 ]; then
+    return 0
+  fi
+  if [ -n "${ALIVE_ALLOW_ROOT:-}" ]; then
+    warn "rodando como root (ALIVE_ALLOW_ROOT definido) — o alive irá para \$HOME=$HOME."
+    return 0
+  fi
+
+  err "não rode o instalador como root."
+  printf '\n'
+  info "o alive é instalado por usuário, dentro do seu \$HOME."
+  info "como root ele iria para ${BOLD}/root${RESET} e o comando ${BOLD}alive${RESET} não"
+  info "apareceria para ${BOLD}${SUDO_USER:-o seu usuário}${RESET}."
+  printf '\n'
+  printf '  %srode assim:%s  %s./install.sh%s  %s(sem sudo — ele pede a senha só se precisar)%s\n' \
+    "$BOLD" "$RESET" "$CYAN" "$RESET" "$DIM" "$RESET"
+  printf '\n'
+  exit 1
+}
+
+# Restos de um `sudo ./install.sh` anterior: build/ e *.egg-info/ com dono root.
+# O setuptools não consegue reescrevê-los e o pip falha ao montar o pacote, então
+# detectamos e limpamos antes de tentar.
+clean_stale_build_artifacts() {
+  local dir="$1" p
+  local -a stale=()
+  for p in "$dir/build" "$dir"/*.egg-info; do
+    [ -e "$p" ] || continue
+    [ -O "$p" ] && continue   # é seu: o pip sobrescreve sem problema
+    stale+=("$p")
+  done
+  if [ "${#stale[@]}" -eq 0 ]; then
+    return 0
+  fi
+
+  warn "achei restos de build de outro usuário (provavelmente de um 'sudo ./install.sh'):"
+  for p in "${stale[@]}"; do printf '    %s\n' "$p"; done
+  info "eles impedem o pip de reconstruir o pacote."
+
+  if [ -z "$SUDO" ]; then
+    err "remova e rode de novo: sudo rm -rf ${stale[*]}"
+    exit 1
+  fi
+  if [ -t 0 ]; then
+    printf "%sRemover agora (usa sudo)?%s [S/n] " "$BOLD" "$RESET"
+    read -r ans || ans=""
+    case "$ans" in
+      [Nn]*) err "ok. remova e rode de novo: sudo rm -rf ${stale[*]}"; exit 1 ;;
+    esac
+  fi
+  if $SUDO rm -rf -- "${stale[@]}"; then
+    ok "restos removidos."
+  else
+    err "não consegui remover. rode: sudo rm -rf ${stale[*]}"
+    exit 1
+  fi
+}
+
 pkg_install() {
   # pkg_install <pacote>
   local p="$1"
@@ -304,6 +371,7 @@ install_alive() {
   local dir
   dir="$(cd "$(dirname "$0")" && pwd)"
 
+  clean_stale_build_artifacts "$dir"
   create_venv
 
   info "instalando dependências (pode levar um minuto)..."
@@ -396,6 +464,7 @@ detect_pkg
 need_sudo
 [ -n "$PKG" ] && info "gerenciador de pacotes: ${BOLD}$PKG${RESET}" || warn "gerenciador de pacotes não detectado."
 
+ensure_not_root
 ensure_python
 resolve_paths
 maybe_install_nmap "$NMAP_CHOICE"
