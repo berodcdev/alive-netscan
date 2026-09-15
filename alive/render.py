@@ -12,7 +12,7 @@ from rich.markup import escape
 from rich.table import Table
 from rich.text import Text
 
-from . import __author_email__, __version__
+from . import __version__
 from .history import seen_label
 from .net import NetInfo, channel_from_freq
 
@@ -113,7 +113,8 @@ def print_summary(
     ago = getattr(diff, "ago", None)
     if new_count:
         since = f" [dim](desde o scan de {ago} atrás)[/dim]" if ago else ""
-        _kv("[+]", "bright_green", "novos", f"[bold bright_green]{new_count}[/bold bright_green]{since}")
+        contagem = f"[bold bright_green]{new_count}[/bold bright_green]"
+        _kv("[+]", "bright_green", "novos", f"{contagem}{since}")
     if gone:
         # Nome vindo da rede (mDNS/NetBIOS/UPnP): sem escape, um aparelho
         # chamado "[/bold]" derruba o render inteiro com MarkupError — e leva
@@ -141,7 +142,7 @@ _VENDOR_DROP = {
     "technology", "systems", "system", "electronics", "electronic", "gmbh",
     "llc", "company", "international", "communications", "communication",
     "networks", "network", "sa", "ag", "limited", "foundation", "interactive",
-    "labs", "solutions", "group", "holdings", "devices",
+    "labs", "solutions", "group", "holdings", "devices", "entertainment",
 }
 
 
@@ -184,7 +185,7 @@ def clean_hostname(name: Optional[str]) -> Optional[str]:
     if not parts:
         return None
     # "X.X" ou "X.X.X" -> "X" (mesmo rótulo repetido no domínio)
-    if len(set(p.lower() for p in parts)) == 1:
+    if len({p.lower() for p in parts}) == 1:
         return parts[0]
     return ".".join(parts)
 
@@ -348,8 +349,8 @@ def render_table(hosts: list[dict], net: NetInfo) -> None:
     if legend:
         console.print(f"[dim]› {' · '.join(legend)}[/dim]")
     console.print(
-        f"[dim]› [bold]--json[/bold] para saída estruturada · "
-        f"[bold]-h[/bold] para todas as opções[/dim]\n"
+        "[dim]› [bold]--json[/bold] para saída estruturada · "
+        "[bold]-h[/bold] para todas as opções[/dim]\n"
     )
 
 

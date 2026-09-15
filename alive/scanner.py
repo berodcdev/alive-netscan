@@ -65,7 +65,7 @@ def _ping_cmd(ip: str, timeout: float) -> list[str]:
         # -W em milissegundos no macOS
         return ["ping", "-c", "1", "-t", "1", "-W", str(int(timeout * 1000)), ip]
     # Linux: -W em segundos (inteiro, mínimo 1)
-    return ["ping", "-c", "1", "-w", str(max(1, int(round(timeout)))), ip]
+    return ["ping", "-c", "1", "-w", str(max(1, round(timeout))), ip]
 
 
 def _ping_one(ip: str, timeout: float) -> Optional[dict]:

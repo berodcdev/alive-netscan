@@ -8,7 +8,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/plataforma-macOS%20%7C%20Linux-2ea043">
-  <img src="https://img.shields.io/badge/python-3.8%2B-2ea043">
+  <img src="https://img.shields.io/badge/python-3.9%2B-2ea043">
   <img src="https://img.shields.io/badge/licença-MIT-2ea043">
 </p>
 
@@ -106,7 +106,7 @@ apareceria como `NOVO` em cada scan.
 
 ## Requisitos
 
-- Python 3.8+ (o instalador escolhe automaticamente uma versão saudável)
+- Python 3.9+ (o instalador escolhe automaticamente uma versão saudável)
 - Deps Python (instaladas no venv): `rich`, `rich-argparse`, `zeroconf`, `mac-vendor-lookup`
 - Opcional: `nmap` (melhora a cobertura do scan)
 
@@ -144,10 +144,25 @@ O comando fica em `~/.local/bin`. Reabra o terminal ou rode:
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
+## Desenvolvimento
+
+```bash
+python3 -m venv .venv && . .venv/bin/activate
+pip install -e ".[dev]"
+pytest          # suíte completa
+ruff check .    # lint
+```
+
+Todo o parsing da ferramenta (MAC, TTL, tabela ARP, saída do nmap, NBSTAT, XML do
+UPnP, nomes e classificação) é função pura e está coberto por testes — é onde os
+bugs moram. O CI roda `pytest` em Python 3.9–3.13 no Linux e no macOS, mais
+`ruff` e `shellcheck install.sh`.
+
 ## Contribuindo
 
-Contribuições são bem-vindas! Abra uma issue ou PR. Ideias úteis: mais regras de
-classificação por fabricante/serviço, suporte a IPv6, mais gerenciadores de pacotes.
+Contribuições são bem-vindas! Abra uma issue ou PR — o CI precisa passar. Ideias
+úteis: mais regras de classificação por fabricante/serviço, suporte a IPv6, mais
+gerenciadores de pacotes.
 
 O GIF de demonstração é gerado com [VHS](https://github.com/charmbracelet/vhs):
 `vhs assets/demo.tape` (usa `alive --demo`, sem expor nenhuma rede real).

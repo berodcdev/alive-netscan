@@ -31,7 +31,7 @@ from . import (
 )
 
 DESCRIPTION = """\
-[bold green]alive[/bold green] — reconhecimento de hosts na rede local [dim](WiFi/LAN · macOS + Linux)[/dim]
+[bold green]alive[/bold green] — recon de hosts na rede local [dim](macOS + Linux)[/dim]
 
 Varre a subrede, enumera cada host vivo e faz fingerprint de IP, MAC, fabricante
 e tipo de dispositivo (roteador, computador, celular, TV, assistente, IoT...).\
@@ -64,18 +64,18 @@ def build_parser() -> argparse.ArgumentParser:
     try:
         # RawDescription* preserva as quebras de linha do texto (descrição/exemplos)
         # e ainda colore os argumentos.
-        from rich_argparse import RawDescriptionRichHelpFormatter as _RF
+        from rich_argparse import RawDescriptionRichHelpFormatter as _Rich
 
-        _RF.styles["argparse.prog"] = "bold green"
-        _RF.styles["argparse.groups"] = "bold green"
-        _RF.styles["argparse.args"] = "bold green"
-        _RF.styles["argparse.metavar"] = "dim green"
-        _RF.styles["argparse.help"] = "default"
-        _RF.styles["argparse.text"] = "default"
-        _RF.usage_markup = True
+        _Rich.styles["argparse.prog"] = "bold green"
+        _Rich.styles["argparse.groups"] = "bold green"
+        _Rich.styles["argparse.args"] = "bold green"
+        _Rich.styles["argparse.metavar"] = "dim green"
+        _Rich.styles["argparse.help"] = "default"
+        _Rich.styles["argparse.text"] = "default"
+        _Rich.usage_markup = True
         # Manter a capitalização exata dos títulos de grupo (sem Title Case).
-        _RF.group_name_formatter = str
-        formatter = _RF  # type: ignore[assignment]
+        _Rich.group_name_formatter = str
+        formatter = _Rich  # type: ignore[assignment]
     except ImportError:
         pass
 
@@ -238,17 +238,22 @@ def _sort_hosts(hosts: list[dict], key: str) -> list[dict]:
     return sorted(hosts, key=lambda h: ipaddress.ip_address(h["ip"]))
 
 
+def _apply_fast(args: argparse.Namespace) -> None:
+    """--fast é um atalho: só ping sweep + ARP, sem sonda de nome nem de tipo."""
+    if not getattr(args, "fast", False):
+        return
+    args.no_mdns = True
+    args.no_vendor = True
+    args.no_ports = True
+    args.no_upnp = True
+    args.no_netbios = True
+
+
 def run(args: argparse.Namespace) -> int:
     if getattr(args, "demo", False):
         return _run_demo(args)
 
-    # --fast é um atalho: só ping sweep + ARP, sem nenhuma sonda de nome/tipo.
-    if getattr(args, "fast", False):
-        args.no_mdns = True
-        args.no_vendor = True
-        args.no_ports = True
-        args.no_upnp = True
-        args.no_netbios = True
+    _apply_fast(args)
 
     # 1) Descobrir a rede local.
     netinfo = net.discover()
@@ -334,10 +339,10 @@ def _collect(
 
     # 1) Hosts vivos (barra de progresso, exceto em JSON/watch silencioso).
     total = max(1, network.num_addresses - 2)
-    scan_kwargs = dict(
-        use_nmap=use_nmap, timeout=args.timeout, workers=args.workers,
-        local_ip=netinfo.ip, gateway=netinfo.gateway,
-    )
+    scan_kwargs = {
+        "use_nmap": use_nmap, "timeout": args.timeout, "workers": args.workers,
+        "local_ip": netinfo.ip, "gateway": netinfo.gateway,
+    }
     if quiet:
         hosts_raw = scanner.scan(network, **scan_kwargs)
     else:
@@ -480,7 +485,7 @@ def _staged(args, quiet: bool, label: str, fn):
         nonlocal error
         try:
             return fn()
-        except Exception as exc:  # noqa: BLE001 - etapa opcional nunca derruba o scan
+        except Exception as exc:
             if getattr(args, "verbose", False):
                 raise
             error = exc
@@ -579,31 +584,31 @@ def _run_demo(args: argparse.Namespace) -> int:
         h["notes"] = findings.short_notes(h)
         return h
 
-    C = classify
+    tipos = classify
     hosts = [
-        host("192.168.0.1", "a4:2b:8c:1f:07:e3", "roteador", "TP-Link", C.ROUTER,
+        host("192.168.0.1", "a4:2b:8c:1f:07:e3", "roteador", "TP-Link", tipos.ROUTER,
              ("dns", "http"), model="Archer C6", rtt=2.1),
-        host("192.168.0.42", "f0:18:98:2a:1b:cd", "meu-notebook", "Apple, Inc.", C.COMPUTER,
+        host("192.168.0.42", "f0:18:98:2a:1b:cd", "meu-notebook", "Apple, Inc.", tipos.COMPUTER,
              ("ssh", "workstation"), model="MacBook Air", rtt=7.4),
         host("192.168.0.51", "3c:5a:b4:77:21:9f", "Galaxy-S23", "Samsung Electronics Co.,Ltd",
-             C.PHONE, (), rtt=31.0),
-        host("192.168.0.55", "6e:1a:c4:90:2d:7b", None, None, C.PHONE, (),
+             tipos.PHONE, (), rtt=31.0),
+        host("192.168.0.55", "6e:1a:c4:90:2d:7b", None, None, tipos.PHONE, (),
              inferred=True, is_new=True, rtt=44.2, first_seen=None, seen_count=1, presence=0.02),
-        host("192.168.0.60", "54:60:09:aa:bb:12", "Sala (Chromecast)", "Google LLC", C.TV,
+        host("192.168.0.60", "54:60:09:aa:bb:12", "Sala (Chromecast)", "Google LLC", tipos.TV,
              ("googlecast", "cast"), model="Chromecast Ultra", rtt=12.0),
-        host("192.168.0.71", "68:37:e9:3d:4c:8a", "Echo-Cozinha", "Amazon", C.SPEAKER,
+        host("192.168.0.71", "68:37:e9:3d:4c:8a", "Echo-Cozinha", "Amazon", tipos.SPEAKER,
              ("amzn-alexa",), model="Echo Dot", rtt=18.3),
-        host("192.168.0.80", "9c:93:4e:55:70:2b", "HP-LaserJet", "HP Inc.", C.PRINTER,
+        host("192.168.0.80", "9c:93:4e:55:70:2b", "HP-LaserJet", "HP Inc.", tipos.PRINTER,
              ("ipp", "jetdirect"), model="HP LaserJet M28w", rtt=9.9),
-        host("192.168.0.88", "3c:e1:a1:44:0b:19", "cam-garagem", "Intelbras", C.CAMERA,
+        host("192.168.0.88", "3c:e1:a1:44:0b:19", "cam-garagem", "Intelbras", tipos.CAMERA,
              ("rtsp", "http", "telnet"), banners={"http_server": "GoAhead-Webs"}, rtt=3.2),
-        host("192.168.0.90", "d8:f1:5b:23:9e:44", "lampada-quarto", "Espressif", C.IOT,
+        host("192.168.0.90", "d8:f1:5b:23:9e:44", "lampada-quarto", "Espressif", tipos.IOT,
              ("mqtt",), rtt=25.7),
         host("192.168.0.101", "dc:a6:32:11:88:f0", "raspberrypi", "Raspberry Pi Foundation",
-             C.SBC, ("ssh", "plex"), banners={"ssh": "OpenSSH_9.6p1 Debian"}, rtt=1.8),
-        host("192.168.0.110", "78:c8:81:6e:aa:01", "PlayStation-5", "Sony Interactive", C.GAME,
+             tipos.SBC, ("ssh", "plex"), banners={"ssh": "OpenSSH_9.6p1 Debian"}, rtt=1.8),
+        host("192.168.0.110", "78:c8:81:6e:aa:01", "PlayStation-5", "Sony Interactive", tipos.GAME,
              (), rtt=15.1),
-        host("192.168.0.150", "00:1a:2b:3c:4d:5e", None, "Dell Inc.", C.COMPUTER, (),
+        host("192.168.0.150", "00:1a:2b:3c:4d:5e", None, "Dell Inc.", tipos.COMPUTER, (),
              inferred=True, via="arp", ttl=128, os_family="Windows",
              first_seen=time.time() - 86400 * 2, seen_count=3, presence=0.3),
     ]
@@ -653,7 +658,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     except KeyboardInterrupt:
         render.console.print("\n[yellow]interrompido pelo usuário.[/yellow]")
         return 130
-    except Exception as exc:  # noqa: BLE001 - UX: nunca vaza stack trace cru
+    except Exception as exc:
         if getattr(args, "verbose", False):
             raise
         # Sem o nome da classe, um KeyError vira só "'location'" na tela.

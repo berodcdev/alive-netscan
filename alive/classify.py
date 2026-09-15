@@ -7,6 +7,7 @@ onde há apenas probabilidade (o caso clássico é o celular de MAC aleatório).
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Optional
 
@@ -55,6 +56,35 @@ _NET_VENDORS = (
 
 def _has(services: set[str], *names: str) -> bool:
     return any(n in services for n in names)
+
+
+def _text_has(text: str, *keys: str) -> bool:
+    """Casa palavra inteira em hostname/banner/UPnP.
+
+    Chaves com hífen na borda (``cam-``, ``-ap``) continuam sendo fragmento,
+    que é como foram escritas. As demais passam a exigir palavra inteira: sem
+    isso um banner com "watchdog" virava WEARABLE por conter "watch", e
+    "netvision" virava TV por conter "tv".
+    """
+    for k in keys:
+        if k.startswith("-") or k.endswith("-"):
+            if k in text:
+                return True
+        elif re.search(rf"(?<![a-z0-9]){re.escape(k)}(?![a-z0-9])", text):
+            return True
+    return False
+
+
+def _vendor_has(vendor: str, *keys: str) -> bool:
+    """Casa fabricante por palavra inteira, não por pedaço do nome.
+
+    Substring puro classificava a **Intelbras** (câmeras e roteadores) como
+    COMPUTADOR, porque "intel" cabe dentro de "intelbras" — e a Intelbras é
+    uma das marcas mais comuns numa rede doméstica brasileira.
+    """
+    return any(
+        re.search(rf"(?<![a-z0-9]){re.escape(k)}(?![a-z0-9])", vendor) for k in keys
+    )
 
 
 # Software de servidor web embarcado -> o aparelho que costuma rodá-lo.
@@ -140,7 +170,7 @@ def classify(
         (("roku",), TV),
         (("playstation", "ps4", "ps5"), GAME),
         (("xbox",), GAME),
-        (("nintendo", "switch"), GAME),
+        (("nintendo",), GAME),
         (("raspberrypi", "raspberry"), SBC),
         (("printer", "hp-", "epson", "brother", "canon"), PRINTER),
         (("camera", "cam-", "ipcam", "dvr", "nvr", "vip-", "vhd"), CAMERA),
@@ -150,7 +180,7 @@ def classify(
         (("galaxy",), PHONE),
     ]
     for keys, dev in keyword_map:
-        if any(k in text for k in keys):
+        if _text_has(text, *keys):
             return dev, False
 
     # 4) Tipo de dispositivo declarado via UPnP.
@@ -166,11 +196,13 @@ def classify(
         (("amazon",), SPEAKER),
         (("google", "nest labs"), SPEAKER),
         (("roku",), TV),
+        # Antes de "sony": "Sony Interactive Entertainment" é o PlayStation, e
+        # casaria com a entrada de TV se ela viesse primeiro.
+        (("nintendo", "sony interactive", "microsoft"), GAME),
         (("sony", "samsung electronics", "lg electronics", "tcl", "vizio", "hisense"), TV),
         (("raspberry pi", "raspberry"), SBC),
         (("hikvision", "dahua", "reolink", "ezviz"), CAMERA),
         (("espressif", "tuya", "sonoff", "shelly", "itead", "multilaser"), IOT),
-        (("nintendo", "sony interactive", "microsoft"), GAME),
         (("xiaomi", "huawei", "oneplus", "motorola", "oppo", "vivo", "realme"), PHONE),
         (("apple",), COMPUTER),  # Apple genérico -> computador (celulares acima)
         (
@@ -182,7 +214,7 @@ def classify(
         ),
     ]
     for keys, dev in vendor_map:
-        if any(k in v for k in keys):
+        if _vendor_has(v, *keys):
             return dev, False
 
     # 5b) Banner de servidor web/SSH embarcado.
@@ -192,7 +224,7 @@ def classify(
                 return dev, False
 
     # 6) Equipamento de rede (não é o gateway, então é AP/repetidor/switch).
-    if any(k in v for k in _NET_VENDORS):
+    if _vendor_has(v, *_NET_VENDORS):
         # A Intelbras vende de câmera a roteador; sem outro sinal, fica no palpite.
         return NETDEV, True
 

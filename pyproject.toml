@@ -1,23 +1,28 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=77.0.3"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "alive-netscan"
-version = "0.3.1"
+dynamic = ["version"]
 description = "Descoberta amigável de hosts vivos na rede WiFi (macOS + Linux)."
 readme = "README.md"
-requires-python = ">=3.8"
-license = { text = "MIT" }
+requires-python = ">=3.9"
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "Bernardo", email = "dev@bernardorodc.com" }]
 keywords = ["network", "scanner", "wifi", "discovery", "arp", "mdns", "bonjour"]
 classifiers = [
     "Environment :: Console",
     "Intended Audience :: System Administrators",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: MacOS",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: System :: Networking :: Monitoring",
 ]
 dependencies = [
@@ -26,6 +31,9 @@ dependencies = [
     "zeroconf>=0.100",
     "mac-vendor-lookup>=0.1.12",
 ]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0", "ruff>=0.5"]
 
 [project.urls]
 Homepage = "https://github.com/berodcdev/alive-netscan"
@@ -36,3 +44,30 @@ alive = "alive.cli:main"
 
 [tool.setuptools]
 packages = ["alive"]
+
+[tool.setuptools.dynamic]
+version = { attr = "alive.__version__" }
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+# BLE e N entram porque o código já marca com `# noqa` os pontos onde um
+# `except Exception` amplo é a decisão certa (sonda opcional nunca derruba o
+# scan) — com as regras ligadas, essas marcações voltam a significar algo.
+select = ["E", "F", "W", "I", "B", "C4", "BLE", "N", "RUF"]
+ignore = [
+    "B008",    # chamada em default de argumento: não ocorre aqui
+    "RUF001",  # "caracteres ambíguos": o código e as mensagens são em português
+    "RUF002",
+    "RUF003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Os testes exercitam funções privadas de propósito — é onde mora o parsing.
+"tests/*" = ["E501"]

@@ -17,9 +17,9 @@ set -euo pipefail
 if [ -t 1 ] && command -v tput >/dev/null 2>&1 && [ "$(tput colors 2>/dev/null || echo 0)" -ge 8 ]; then
   BOLD="$(tput bold)"; DIM="$(tput dim)"; RESET="$(tput sgr0)"
   RED="$(tput setaf 1)"; GREEN="$(tput setaf 2)"; YELLOW="$(tput setaf 3)"
-  BLUE="$(tput setaf 4)"; MAGENTA="$(tput setaf 5)"; CYAN="$(tput setaf 6)"
+  MAGENTA="$(tput setaf 5)"; CYAN="$(tput setaf 6)"
 else
-  BOLD=""; DIM=""; RESET=""; RED=""; GREEN=""; YELLOW=""; BLUE=""; MAGENTA=""; CYAN=""
+  BOLD=""; DIM=""; RESET=""; RED=""; GREEN=""; YELLOW=""; MAGENTA=""; CYAN=""
 fi
 
 info()  { printf "%s›%s %s\n" "$CYAN" "$RESET" "$1"; }

@@ -7,6 +7,7 @@ import threading
 import time
 from typing import Callable, Optional
 
+
 # --------------------------------------------------------------------------- #
 # Utilitário: executar com deadline rígido via threads daemon.
 #
@@ -228,13 +229,13 @@ def discover_mdns(duration: float = 3.0) -> dict[str, dict]:
                 entry["name"] = friendly
 
     class _Listener(ServiceListener):
-        def add_service(self, zc: "Zeroconf", type_: str, name: str) -> None:  # noqa: N802
+        def add_service(self, zc: "Zeroconf", type_: str, name: str) -> None:
             self._handle(zc, type_, name)
 
-        def update_service(self, zc: "Zeroconf", type_: str, name: str) -> None:  # noqa: N802
+        def update_service(self, zc: "Zeroconf", type_: str, name: str) -> None:
             self._handle(zc, type_, name)
 
-        def remove_service(self, zc: "Zeroconf", type_: str, name: str) -> None:  # noqa: N802
+        def remove_service(self, zc: "Zeroconf", type_: str, name: str) -> None:
             pass
 
         def _handle(self, zc: "Zeroconf", type_: str, name: str) -> None:
