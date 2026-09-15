@@ -701,6 +701,8 @@ def _run_demo(args: argparse.Namespace) -> int:
     )
     render.render_table(hosts, demo_net, demo_findings)
     render.print_findings(demo_findings)
+    # Duração fictícia como o resto do demo, para a saída ficar igual à real.
+    render.print_footer(8.4, 254, hosts)
     return _exit_code(demo_findings, args.fail_on)
 
 

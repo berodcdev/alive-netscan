@@ -5,21 +5,9 @@ from __future__ import annotations
 import ipaddress
 
 import pytest
-from rich.console import Console
 
-from alive import classify, cli, render
+from alive import classify, cli
 from alive.net import NetInfo
-
-
-@pytest.fixture
-def captura(monkeypatch):
-    import io
-
-    buf = io.StringIO()
-    monkeypatch.setattr(render, "console",
-                        Console(file=buf, width=100, no_color=True, highlight=False,
-                                legacy_windows=False))
-    return buf
 
 
 def netinfo(ip="192.168.0.61"):

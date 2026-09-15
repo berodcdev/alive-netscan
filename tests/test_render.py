@@ -6,22 +6,10 @@ import ipaddress
 import json
 
 import pytest
-from rich.console import Console
 
 from alive import classify, history, render
 from alive.net import NetInfo
-
-
-@pytest.fixture
-def captura(monkeypatch):
-    """Console de largura fixa que escreve num buffer, para inspecionar a saída."""
-    import io
-
-    buf = io.StringIO()
-    console = Console(file=buf, width=100, highlight=False, no_color=True,
-                      legacy_windows=False)
-    monkeypatch.setattr(render, "console", console)
-    return buf
+from tests.conftest import Captura
 
 
 def host(ip="192.168.0.9", **extra):
@@ -173,18 +161,15 @@ class TestEscapingHostil:
 class TestRenderTable:
     @pytest.mark.parametrize("largura", [60, 80, 100, 120, 160, 200])
     def test_nunca_estoura_a_largura(self, largura, monkeypatch):
-        import io
-        buf = io.StringIO()
-        monkeypatch.setattr(render, "console",
-                            Console(file=buf, width=largura, no_color=True,
-                                    highlight=False, legacy_windows=False))
+        cap = Captura(largura)
+        monkeypatch.setattr(render, "console", cap.console)
         net = NetInfo(interface=None, ip=None, network=None, gateway=None, ssid=None)
         render.render_table(
             [host(name="um-nome-bem-comprido-de-aparelho", vendor="Raspberry Pi",
                   model="Servidor doméstico com nome longo")],
             net,
         )
-        for linha in buf.getvalue().splitlines():
+        for linha in cap.linhas():
             assert len(linha) <= largura, f"linha de {len(linha)} col em {largura}"
 
     def test_sem_hosts(self, captura):
@@ -290,14 +275,11 @@ class TestColunaCompacta:
     """Abaixo de 92 col o fabricante entra no DETALHE — sem empilhar vazios."""
 
     def _linhas(self, h, monkeypatch, largura=80):
-        import io
-        buf = io.StringIO()
-        monkeypatch.setattr(render, "console",
-                            Console(file=buf, width=largura, no_color=True,
-                                    highlight=False, legacy_windows=False))
+        cap = Captura(largura)
+        monkeypatch.setattr(render, "console", cap.console)
         net = NetInfo(interface=None, ip=None, network=None, gateway=None, ssid=None)
         render.render_table([h], net)
-        return buf.getvalue()
+        return cap.getvalue()
 
     def test_fabricante_e_detalhe(self, monkeypatch):
         saida = self._linhas(host(vendor="Raspberry Pi Foundation",
