@@ -13,6 +13,7 @@ from rich.table import Table
 from rich.text import Text
 
 from . import __version__
+from .findings import SEVERITY_COLOR, SEVERITY_ORDER
 from .history import seen_label
 from .net import NetInfo, channel_from_freq
 
@@ -30,13 +31,39 @@ def print_banner() -> None:
     console.print(BANNER.format(ver=__version__))
 
 
+def _print_hanging(head: Text, value: Text) -> None:
+    """Imprime ``head`` + ``value``, com as linhas seguintes alinhadas sob o valor.
+
+    Feito à mão porque ``Table.grid`` resolveria o alinhamento mas preenche
+    cada célula até a borda — o que enche a saída de espaços no fim da linha,
+    visível assim que alguém redireciona para um arquivo.
+    """
+    recuo = head.cell_len
+    linhas = value.wrap(console, max(20, console.size.width - recuo))
+    if not linhas:
+        console.print(head)
+        return
+    # Text.rstrip() do rich altera em lugar e devolve None.
+    for linha in linhas:
+        linha.rstrip()
+    console.print(head + linhas[0])
+    espacos = Text(" " * recuo)
+    for extra in linhas[1:]:
+        console.print(espacos + extra)
+
+
 def _kv(prefix: str, prefix_style: str, label: str, value: str) -> None:
-    """Linha estilo recon: '[*] label ........ value'."""
+    """Linha estilo recon: '[*] label ........ value'.
+
+    Um valor comprido quebra alinhado sob si mesmo; como texto solto ele
+    voltava para a coluna zero e partia no meio de um item.
+    """
     dots = "." * max(2, 13 - len(label))
-    console.print(
+    head = Text.from_markup(
         f"[{prefix_style}]{prefix}[/{prefix_style}] "
-        f"[bold white]{label}[/bold white] [dim]{dots}[/dim] {value}"
+        f"[bold white]{label}[/bold white] [dim]{dots}[/dim] "
     )
+    _print_hanging(head, Text.from_markup(value))
 
 
 def print_summary(
@@ -146,20 +173,47 @@ _VENDOR_DROP = {
 }
 
 
+# A base OUI mistura caixas: vem "zte" ao lado de "Samsung" e "TP-LINK". Siglas
+# têm grafia própria; o resto cai num Title Case simples.
+_VENDOR_CASE = {
+    "zte": "ZTE", "hp": "HP", "lg": "LG", "tcl": "TCL", "asus": "ASUS",
+    "asustek": "ASUSTek", "msi": "MSI", "amd": "AMD", "ibm": "IBM",
+    "tp-link": "TP-Link", "d-link": "D-Link", "htc": "HTC", "lge": "LGE",
+    "arris": "ARRIS", "adtran": "ADTRAN", "avm": "AVM", "nec": "NEC",
+    "sagemcom": "Sagemcom", "askey": "Askey", "cig": "CIG", "fiberhome": "FiberHome",
+}
+
+
+def _fix_case(word: str) -> str:
+    conhecido = _VENDOR_CASE.get(word.lower())
+    if conhecido:
+        return conhecido
+    # Só mexe em quem veio todo minúsculo ou todo maiúsculo; nomes que já têm
+    # caixa mista ("iRobot", "NetGear") foram escritos assim de propósito.
+    if word.islower() or word.isupper():
+        return word.capitalize()
+    return word
+
+
 def clean_vendor(vendor: Optional[str]) -> Optional[str]:
-    """Encurta nomes de fabricante para exibição (ex.: 'Apple, Inc.' -> 'Apple')."""
+    """Encurta e normaliza o fabricante (ex.: 'Apple, Inc.' -> 'Apple')."""
     if not vendor:
         return None
     s = vendor.split(",")[0].strip()
     words = s.split()
     while words and words[-1].lower().strip(".,") in _VENDOR_DROP:
         words.pop()
-    return " ".join(words) or s
+    words = words or s.split()
+    return " ".join(_fix_case(w) for w in words)
 
 
 _NAME_SUFFIXES = (".local", ".lan", ".home", ".localdomain", ".home.arpa")
 
 _IP_LIKE = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
+
+# Célula sem informação. Uma constante porque a tabela precisa reconhecê-la
+# para não empilhar dois placeholders na mesma coluna.
+VAZIO = "[dim]—[/dim]"
 
 
 def clean_hostname(name: Optional[str]) -> Optional[str]:
@@ -227,7 +281,14 @@ def detail_text(host: dict) -> str:
     for note in host.get("notes") or []:
         bits.append(f"[bright_red]{note}[/bright_red]")
 
-    return " [dim]·[/dim] ".join(bits) if bits else "[dim]—[/dim]"
+    return " [dim]·[/dim] ".join(bits) if bits else VAZIO
+
+
+# Marcador e rótulo por severidade. O resumo prometia "3 alto · 2 baixo" e
+# depois imprimia todo achado com o mesmo "[!]" — sem dizer qual era qual.
+_SEV_MARK = {"alto": ("[!]", "ALTO"), "medio": ("[!]", "MÉDIO"), "baixo": ("[·]", "BAIXO")}
+# Marca de uma letra na coluna "!" da tabela, ligando host e achado.
+_SEV_TABLE_MARK = {"alto": "!", "medio": "!", "baixo": "·"}
 
 
 def print_findings(items: list, limit: int = 8) -> None:
@@ -236,13 +297,39 @@ def print_findings(items: list, limit: int = 8) -> None:
         return
     console.print("[bold yellow][!] achados[/bold yellow]")
     for f in items[:limit]:
-        console.print(f"  [{f.color}][!][/{f.color}] {escape(f.message)}")
+        mark, rotulo = _SEV_MARK.get(f.severity, ("[!]", f.severity.upper()))
+        _print_hanging(
+            Text.from_markup(f"  [{f.color}]{mark} {rotulo:<5}[/{f.color}] "),
+            Text.from_markup(escape(f.message)),
+        )
     if len(items) > limit:
         console.print(f"  [dim]... e mais {len(items) - limit}[/dim]")
     console.print()
 
 
-def render_table(hosts: list[dict], net: NetInfo) -> None:
+def _worst_by_ip(items: Optional[list]) -> dict[str, str]:
+    """Pior severidade por host, para marcar a linha na tabela."""
+    pior: dict[str, str] = {}
+    for f in items or []:
+        if not f.ip:
+            continue
+        atual = pior.get(f.ip)
+        if atual is None or SEVERITY_ORDER.get(f.severity, 9) < SEVERITY_ORDER.get(atual, 9):
+            pior[f.ip] = f.severity
+    return pior
+
+
+def print_footer(elapsed_s: float, scanned: int, hosts: list[dict]) -> None:
+    """Rodapé: o que a varredura custou."""
+    console.print(
+        f"[dim]› {len(hosts)} vivos de {scanned} endereços "
+        f"em {elapsed_s:.1f}s[/dim]"
+    )
+
+
+def render_table(
+    hosts: list[dict], net: NetInfo, findings: Optional[list] = None
+) -> None:
     """Renderiza a tabela de dispositivos, adaptando as colunas à largura."""
     if not hosts:
         console.print(
@@ -254,6 +341,13 @@ def render_table(hosts: list[dict], net: NetInfo) -> None:
     # Colunas secundárias somem em terminais estreitos, na ordem inversa da
     # importância: primeiro os serviços brutos, por último o essencial.
     width = console.size.width
+    alertas = _worst_by_ip(findings)
+    show_alert = bool(alertas)
+    # Abaixo de ~92 col o fabricante vira prefixo do DETALHE: são os dois dados
+    # que competem pelo espaço e, separados, nenhum dos dois cabe inteiro.
+    compact = width < 92
+    # O "#" não é referenciável por nenhum comando — é o primeiro a sair.
+    show_num = width >= 100
     show_rtt = width >= 92
     show_visto = width >= 104
     show_mac = width >= 124
@@ -264,16 +358,22 @@ def render_table(hosts: list[dict], net: NetInfo) -> None:
         border_style="green",
         header_style="bold green",
         expand=False,
-        pad_edge=False,
     )
-    table.add_column("#", justify="right", style="dim green")
+    if show_num:
+        table.add_column("#", justify="right", style="dim green")
+    if show_alert:
+        table.add_column("!", no_wrap=True, justify="center")
     table.add_column("TIPO", no_wrap=True)
-    table.add_column("HOST", style="bold", overflow="fold")
+    # ellipsis, não fold: quebrar no meio da palavra ("meu-noteboo/k") custa
+    # duas linhas e não deixa o nome mais legível do que "meu-notebook…".
+    table.add_column("HOST", style="bold", no_wrap=True, overflow="ellipsis",
+                     min_width=6)
     table.add_column("IP", no_wrap=True, style="bright_green")
     if show_mac:
         table.add_column("MAC", no_wrap=True, style="dim")
-    table.add_column("FABRICANTE", overflow="fold")
-    table.add_column("DETALHE", overflow="fold")
+    if not compact:
+        table.add_column("FABRICANTE", overflow="ellipsis")
+    table.add_column("DETALHE", overflow="ellipsis", min_width=8)
     if show_rtt:
         table.add_column("RTT", justify="right", no_wrap=True, style="dim")
     if show_visto:
@@ -306,25 +406,47 @@ def render_table(hosts: list[dict], net: NetInfo) -> None:
             any_inferred = True
         type_cell = Text.from_markup(f"[{dev.color}]▪ {dev.label}[/{dev.color}]{mark}")
 
-        vendor = clean_vendor(h.get("vendor"))
-        if vendor:
-            vendor = escape(vendor)
+        limpo = clean_vendor(h.get("vendor"))
+        vendor_conhecido = True
+        if limpo:
+            vendor = escape(limpo)
         elif h.get("random_mac"):
             vendor = "[dim italic]aleatório[/dim italic]"
             any_random = True
         else:
             vendor = "[dim]?[/dim]"
+            vendor_conhecido = False
 
-        row = [
-            str(i),
-            type_cell,
-            Text.from_markup(f"{name}{tag}"),
-            h["ip"],
-        ]
+        row: list = []
+        if show_num:
+            row.append(str(i))
+        if show_alert:
+            sev = alertas.get(h["ip"])
+            row.append(
+                Text.from_markup(
+                    f"[{SEVERITY_COLOR[sev]}]{_SEV_TABLE_MARK[sev]}[/]" if sev else ""
+                )
+            )
+        row.append(type_cell)
+        row.append(Text.from_markup(f"{name}{tag}"))
+        row.append(h["ip"])
         if show_mac:
             row.append(h.get("mac") or "[dim]—[/dim]")
-        row.append(Text.from_markup(vendor))
-        row.append(Text.from_markup(detail_text(h)))
+        detalhe = detail_text(h)
+        if compact:
+            # Sem coluna própria, o fabricante abre o DETALHE — mas juntar dois
+            # placeholders ("? · —") é pior do que mostrar um só.
+            tem_detalhe = detalhe != VAZIO
+            if vendor_conhecido and tem_detalhe:
+                celula = f"{vendor} [dim]·[/dim] {detalhe}"
+            elif vendor_conhecido:
+                celula = vendor
+            else:
+                celula = detalhe
+            row.append(Text.from_markup(celula))
+        else:
+            row.append(Text.from_markup(vendor))
+            row.append(Text.from_markup(detalhe))
         if show_rtt:
             rtt = h.get("rtt")
             if rtt is None:
@@ -342,16 +464,23 @@ def render_table(hosts: list[dict], net: NetInfo) -> None:
     console.print(table)
 
     legend = []
+    if show_alert:
+        legend.append("[bold]![/bold] = tem achado abaixo")
     if any_inferred:
         legend.append("[bold]?[/bold] = tipo inferido")
     if any_random:
         legend.append("[bold]aleatório[/bold] = MAC privado (iOS/Android)")
+    seta = Text("› ", style="dim")
     if legend:
-        console.print(f"[dim]› {' · '.join(legend)}[/dim]")
-    console.print(
-        "[dim]› [bold]--json[/bold] para saída estruturada · "
-        "[bold]-h[/bold] para todas as opções[/dim]\n"
+        _print_hanging(seta, Text.from_markup(f"[dim]{' · '.join(legend)}[/dim]"))
+    _print_hanging(
+        seta,
+        Text.from_markup(
+            "[dim][bold]--json[/bold] para saída estruturada · "
+            "[bold]-h[/bold] para todas as opções[/dim]"
+        ),
     )
+    console.print()
 
 
 def to_json(hosts: list[dict], net: NetInfo, findings: Optional[list] = None) -> str:

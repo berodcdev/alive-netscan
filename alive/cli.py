@@ -300,14 +300,17 @@ def run(args: argparse.Namespace) -> int:
             f"[dim]({method})[/dim]"
         )
 
+    inicio = time.monotonic()
     hosts, diff, found = _collect(args, netinfo, use_nmap=use_nmap, quiet=args.json)
+    duracao = time.monotonic() - inicio
 
     if args.json:
         print(render.to_json(hosts, netinfo, found))
     else:
         render.print_summary(netinfo, hosts, method=method, diff=diff, findings=found)
-        render.render_table(hosts, netinfo)
+        render.render_table(hosts, netinfo, found)
         render.print_findings(found)
+        render.print_footer(duracao, max(1, network.num_addresses - 2), hosts)
     return 0
 
 
@@ -530,14 +533,14 @@ def _run_watch(
         changed = any(h.get("is_new") for h in hosts) or bool(diff.gone)
         if cycle == 1:
             render.print_summary(netinfo, hosts, method=method, diff=diff, findings=found)
-            render.render_table(hosts, netinfo)
+            render.render_table(hosts, netinfo, found)
             render.print_findings(found)
         elif changed:
             render.console.print(
                 f"\n[dim]── ciclo {cycle} · {stamp} ──[/dim]"
             )
             render.print_events(hosts, diff)
-            render.render_table(hosts, netinfo)
+            render.render_table(hosts, netinfo, found)
         else:
             render.console.print(
                 f"[dim][*] ciclo {cycle} · {stamp} · sem mudanças "
@@ -632,7 +635,7 @@ def _run_demo(args: argparse.Namespace) -> int:
         diff=demo_diff,
         findings=demo_findings,
     )
-    render.render_table(hosts, demo_net)
+    render.render_table(hosts, demo_net, demo_findings)
     render.print_findings(demo_findings)
     return 0
 

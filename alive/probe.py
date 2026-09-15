@@ -112,6 +112,29 @@ def _clean(text: Optional[str], limit: int = 60) -> Optional[str]:
     return s[:limit].strip()
 
 
+# Títulos de página que não dizem nada sobre o aparelho. Promovidos a DETALHE,
+# ocupam a coluna com ruído: o roteador aparecia como "302 Found".
+_JUNK_TITLES = frozenset({
+    "document", "index", "index of /", "untitled", "untitled document",
+    "home", "home page", "login", "welcome", "new page", "page", "test",
+    "null", "undefined", "error", "redirect", "redirecting", "loading",
+})
+_STATUS_TITLE = re.compile(r"^[1-5]\d\d\s+\w")     # "302 Found", "401 Unauthorized"
+_NUMERIC_TITLE = re.compile(r"^[\d\s,.;:_+-]+$")     # "0,1,2"
+
+
+def useful_title(title: Optional[str]) -> Optional[str]:
+    """Filtra <title> que não identifica o aparelho."""
+    if not title:
+        return None
+    t = title.strip()
+    if len(t) < 3 or t.lower() in _JUNK_TITLES:
+        return None
+    if _STATUS_TITLE.match(t) or _NUMERIC_TITLE.match(t):
+        return None
+    return t
+
+
 def _read_socket(ip: str, port: int, payload: Optional[bytes], timeout: float) -> str:
     """Abre, envia (opcional) e lê a primeira resposta. '' em qualquer erro."""
     try:
@@ -167,7 +190,7 @@ def _http_banner(ip: str, port: int, tls: bool, timeout: float) -> dict:
         out["http_server"] = _clean(server, 40)
     m = re.search(r"<title[^>]*>(.*?)</title>", text, re.IGNORECASE | re.DOTALL)
     if m:
-        out["http_title"] = _clean(m.group(1), 40)
+        out["http_title"] = useful_title(_clean(m.group(1), 40))
     return {k: v for k, v in out.items() if v}
 
 
@@ -236,8 +259,19 @@ _M_SEARCH = (
 
 
 def _header(text: str, name: str) -> Optional[str]:
-    m = re.search(rf"^{name}\s*:\s*(.+)$", text, re.IGNORECASE | re.MULTILINE)
-    return m.group(1).strip() if m else None
+    """Valor de um header HTTP/RTSP. None se ausente ou vazio.
+
+    O espaço aqui é só horizontal: com ``\\s*``, um header vazio ("Server:")
+    fazia o casamento atravessar a quebra de linha e devolver o valor do
+    header seguinte — o roteador aparecia na tabela como "Accept-Ranges: bytes".
+    """
+    m = re.search(
+        rf"^{re.escape(name)}[^\S\r\n]*:[^\S\r\n]*(.*)$",
+        text, re.IGNORECASE | re.MULTILINE,
+    )
+    if not m:
+        return None
+    return m.group(1).strip() or None
 
 
 # --------------------------------------------------------------------------- #

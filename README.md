@@ -69,6 +69,7 @@ alive -i wlan0             # força uma interface
 alive --watch              # monitora e avisa quem entra e sai (a cada 30s)
 alive --watch 60           # monitorando a cada 60 segundos
 alive --sort type          # agrupa por tipo de dispositivo
+alive -n 10.0.0.0/16 --force  # redes acima de /20 exigem --force
 alive --json > recon.json  # saída em JSON para automação
 ```
 
@@ -82,7 +83,7 @@ Cada sonda pode ser desligada: `--no-nmap`, `--no-mdns`, `--no-vendor`, `--no-po
 | Etapa | O que faz |
 |-------|-----------|
 | **Rede** | interface, IP, subrede, gateway, SSID, canal/sinal do WiFi e DNS em uso (avisa se a rota padrão sai por VPN) |
-| **Scan** | `nmap -sn` (se houver) + ping sweep paralelo, guardando RTT e TTL; **toda entrada ARP completa conta como host vivo** — é assim que aparecem os aparelhos que ignoram ping |
+| **Scan** | `nmap -sn` (se houver) + ping sweep paralelo, guardando RTT e TTL; **a tabela ARP também é fonte de hosts** — é assim que aparecem os aparelhos que ignoram ping. O estado do vizinho é lido junto: quem veio de cache não revalidado é marcado como `ARP obsoleto`, não como presença confirmada |
 | **Nomes** | DNS reverso, mDNS/Bonjour, NetBIOS (Windows/Samba) e `friendlyName` do UPnP |
 | **Modelo** | TXT do mDNS (`MacBook Air`, `Chromecast Ultra`, modelo da impressora), banner de SSH/HTTP/RTSP e família de SO pelo TTL |
 | **Fingerprint** | fabricante por OUI (offline) + ~22 portas TCP que identificam o aparelho |
@@ -166,6 +167,21 @@ gerenciadores de pacotes.
 
 O GIF de demonstração é gerado com [VHS](https://github.com/charmbracelet/vhs):
 `vhs assets/demo.tape` (usa `alive --demo`, sem expor nenhuma rede real).
+
+## Segurança
+
+O `alive` só fala com aparelhos da própria LAN, e trata tudo que eles dizem como
+entrada não confiável: a URL que um aparelho anuncia por SSDP é seguida apenas se
+for `http://` do próprio IP que respondeu, sem redirecionamento — senão qualquer
+aparelho da rede poderia apontar o `alive` para `file:///etc/passwd` ou para um
+host interno arbitrário. Nomes e banners vindos da rede são sempre escapados
+antes de ir para a tela.
+
+As sondas ativas se limitam a: um ping por host, uma conexão TCP em ~22 portas que
+*identificam* o aparelho, e a leitura do banner de quem já estava com a porta
+aberta. Não há teste de credencial, força bruta nem exploração. O TLS não é
+verificado ao ler banner HTTPS, porque aparelhos de LAN usam certificado
+autoassinado — nenhum dado é enviado, só lido.
 
 ## Licença
 

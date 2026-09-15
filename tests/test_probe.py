@@ -180,3 +180,51 @@ class TestRecordSsdp:
         """Regressão: o roteador que responde sem LOCATION não pode virar KeyError."""
         resultados: dict = {}
         assert probe.record_ssdp(resultados, "192.168.0.1", "HTTP/1.1 200 OK\r\n\r\n") is None
+
+
+class TestUsefulTitle:
+    """O <title> só vira DETALHE se disser algo sobre o aparelho."""
+
+    @pytest.mark.parametrize(
+        "titulo",
+        ["302 Found", "401 Unauthorized", "404 Not Found",   # linha de status
+         "0,1,2", "1.2.3", "   ", "42",                      # só números
+         "Document", "index of /", "Login", "Welcome",       # placeholder
+         "ok", "x"],                                          # curto demais
+    )
+    def test_descarta_ruido(self, titulo):
+        assert probe.useful_title(titulo) is None
+
+    @pytest.mark.parametrize(
+        "titulo",
+        ["Archer C6", "Z13220", "HP LaserJet M28w", "RT-AC68U", "Câmera IP"],
+    )
+    def test_mantem_o_que_identifica(self, titulo):
+        assert probe.useful_title(titulo) == titulo
+
+    def test_none(self):
+        assert probe.useful_title(None) is None
+
+
+class TestHeaderVazio:
+    """Regressão: header vazio engolia o valor do header seguinte."""
+
+    RESP = ("HTTP/1.1 302 Found\r\nServer:\r\nAccept-Ranges: bytes\r\n"
+            "Location: /start.html\r\n\r\n")
+
+    def test_header_vazio_e_none(self):
+        assert probe._header(self.RESP, "Server") is None
+
+    def test_nao_invade_a_linha_seguinte(self):
+        assert probe._header(self.RESP, "Server") != "Accept-Ranges: bytes"
+
+    def test_header_seguinte_continua_legivel(self):
+        assert probe._header(self.RESP, "Accept-Ranges") == "bytes"
+
+    def test_valor_normal(self):
+        resp = "HTTP/1.1 200 OK\r\nServer: GoAhead-Webs\r\n\r\n"
+        assert probe._header(resp, "Server") == "GoAhead-Webs"
+
+    def test_nome_com_hifen(self):
+        resp = "RTSP/1.0 200 OK\r\nContent-Type: application/sdp\r\n\r\n"
+        assert probe._header(resp, "Content-Type") == "application/sdp"

@@ -189,3 +189,128 @@ class TestRenderTable:
         net = NetInfo(interface=None, ip=None, network=None, gateway=None, ssid=None)
         render.render_table([], net)
         assert "nenhum host vivo" in captura.getvalue()
+
+
+class TestPrintFindings:
+    """A severidade tem de aparecer: o resumo promete '3 alto · 2 baixo'."""
+
+    def _achados(self):
+        from alive.findings import Finding
+        return [Finding("alto", "192.168.0.88", "telnet aberto"),
+                Finding("medio", "192.168.0.9", "FTP aberto"),
+                Finding("baixo", None, "cache ARP obsoleto")]
+
+    def test_mostra_o_rotulo_de_severidade(self, captura):
+        render.print_findings(self._achados())
+        saida = captura.getvalue()
+        assert "ALTO" in saida and "MÉDIO" in saida and "BAIXO" in saida
+
+    def test_mensagem_longa_quebra_alinhada(self, captura):
+        from alive.findings import Finding
+        longa = "palavra " * 40
+        render.print_findings([Finding("alto", "1.2.3.4", longa.strip())])
+        linhas = [ln for ln in captura.getvalue().splitlines() if ln.strip()]
+        # A continuação fica recuada sob a mensagem, não na coluna zero.
+        assert all(ln.startswith(" ") for ln in linhas[1:])
+
+    def test_sem_achados_nao_imprime_nada(self, captura):
+        render.print_findings([])
+        assert captura.getvalue() == ""
+
+    def test_trunca_e_avisa(self, captura):
+        from alive.findings import Finding
+        render.print_findings([Finding("baixo", None, f"achado {i}") for i in range(12)],
+                              limit=3)
+        assert "e mais 9" in captura.getvalue()
+
+
+class TestColunaDeAlerta:
+    def test_marca_o_host_com_achado(self, captura):
+        from alive.findings import Finding
+        net = NetInfo(interface=None, ip=None, network=None, gateway=None, ssid=None)
+        render.render_table([host("192.168.0.88"), host("192.168.0.9")], net,
+                            [Finding("alto", "192.168.0.88", "telnet aberto")])
+        saida = captura.getvalue()
+        assert "!" in saida and "tem achado abaixo" in saida
+
+    def test_sem_achados_a_coluna_nem_aparece(self, captura):
+        net = NetInfo(interface=None, ip=None, network=None, gateway=None, ssid=None)
+        render.render_table([host("192.168.0.9")], net, [])
+        assert "tem achado abaixo" not in captura.getvalue()
+
+
+class TestSemEspacoNoFimDaLinha:
+    """Espaço no fim da linha aparece assim que alguém redireciona para arquivo."""
+
+    def test_kv_longo(self, captura):
+        net = NetInfo(interface="wlan0", ip=None, network=None, gateway=None,
+                      ssid="rede " * 30)
+        render.print_summary(net, [], method="m " * 40)
+        assert not any(ln.endswith(" ") for ln in captura.getvalue().splitlines())
+
+    def test_achados_longos(self, captura):
+        from alive.findings import Finding
+        render.print_findings([Finding("alto", "1.2.3.4", "palavra " * 40)])
+        assert not any(ln.endswith(" ") for ln in captura.getvalue().splitlines())
+
+
+def test_print_footer(captura):
+    render.print_footer(12.34, 254, [host("192.168.0.1"), host("192.168.0.2")])
+    assert "2 vivos de 254 endereços em 12.3s" in captura.getvalue()
+
+
+class TestCaixaDoFabricante:
+    """A base OUI mistura caixas: vinha 'zte' ao lado de 'Samsung'."""
+
+    @pytest.mark.parametrize(
+        "raw,esperado",
+        [
+            ("zte", "ZTE"),
+            ("ZTE Corporation", "ZTE"),
+            ("TP-LINK TECHNOLOGIES CO.,LTD.", "TP-Link"),
+            ("hewlett packard", "Hewlett Packard"),
+            ("ASUSTek COMPUTER INC.", "ASUSTek Computer"),
+        ],
+    )
+    def test_normaliza(self, raw, esperado):
+        assert render.clean_vendor(raw) == esperado
+
+    def test_caixa_mista_e_intencional(self):
+        """'iRobot' e 'NetGear' foram escritos assim de propósito."""
+        assert render.clean_vendor("iRobot") == "iRobot"
+
+    def test_nome_todo_descartado_nao_vira_vazio(self):
+        """'Technologies Inc' é só sufixo — melhor mostrar algo do que nada."""
+        assert render.clean_vendor("Technologies Inc") == "Technologies Inc"
+
+
+class TestColunaCompacta:
+    """Abaixo de 92 col o fabricante entra no DETALHE — sem empilhar vazios."""
+
+    def _linhas(self, h, monkeypatch, largura=80):
+        import io
+        buf = io.StringIO()
+        monkeypatch.setattr(render, "console",
+                            Console(file=buf, width=largura, no_color=True,
+                                    highlight=False, legacy_windows=False))
+        net = NetInfo(interface=None, ip=None, network=None, gateway=None, ssid=None)
+        render.render_table([h], net)
+        return buf.getvalue()
+
+    def test_fabricante_e_detalhe(self, monkeypatch):
+        saida = self._linhas(host(vendor="Raspberry Pi Foundation",
+                                  model="Servidor"), monkeypatch)
+        assert "Raspberry Pi · Servidor" in saida
+
+    def test_so_fabricante(self, monkeypatch):
+        saida = self._linhas(host(vendor="Samsung Electronics"), monkeypatch)
+        assert "Samsung" in saida and "· —" not in saida
+
+    def test_nem_fabricante_nem_detalhe(self, monkeypatch):
+        """Regressão: aparecia '? · —', dois placeholders na mesma célula."""
+        assert "? · —" not in self._linhas(host(), monkeypatch)
+
+    def test_coluna_fabricante_volta_em_terminal_largo(self, monkeypatch):
+        saida = self._linhas(host(vendor="Samsung Electronics"), monkeypatch,
+                             largura=170)
+        assert "FABRICANTE" in saida and "SERVIÇOS" in saida
