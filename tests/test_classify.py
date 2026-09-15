@@ -227,3 +227,40 @@ class TestPalavraChaveCasaPorPalavra:
         """'cam-' foi escrito como fragmento de propósito."""
         dev, _ = classificar(hostname="cam-garagem")
         assert dev is tipos.CAMERA
+
+
+class TestSnmpETls:
+    """sysDescr do SNMP e CN/SAN do certificado como sinais de tipo."""
+
+    def test_snmp_hp_vira_impressora(self):
+        dev, _ = classificar(
+            snmp={"community": "public",
+                  "descr": "HP ETHERNET MULTI-ENVIRONMENT,ROM,JETDIRECT"},
+        )
+        assert dev is tipos.PRINTER
+
+    def test_snmp_cisco_vira_rede(self):
+        dev, _ = classificar(snmp={"community": "public", "descr": "Cisco IOS C2960"})
+        assert dev is tipos.NETDEV
+
+    def test_snmp_routeros_vira_rede(self):
+        dev, _ = classificar(snmp={"community": "public", "descr": "RouterOS 7.11"})
+        assert dev is tipos.NETDEV
+
+    def test_cert_synology_vira_servidor(self):
+        dev, _ = classificar(
+            services={"https"},
+            tls={"subject_cn": "diskstation", "issuer": "Synology Inc."},
+        )
+        assert dev is tipos.SBC
+
+    def test_san_no_certificado_alimenta_o_tipo(self):
+        dev, _ = classificar(
+            services={"https"},
+            tls={"subject_cn": "web", "issuer": "self", "san": ["printer.local"]},
+        )
+        assert dev is tipos.PRINTER
+
+    def test_sem_snmp_nem_tls_continua_funcionando(self):
+        dev, _ = classificar(vendor="Apple")
+        assert dev is tipos.COMPUTER

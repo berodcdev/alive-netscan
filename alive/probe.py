@@ -161,11 +161,18 @@ def _read_socket(ip: str, port: int, payload: Optional[bytes], timeout: float) -
 
 
 def _http_banner(ip: str, port: int, tls: bool, timeout: float) -> dict:
-    """Server header + <title> da página inicial."""
+    """Server header + <title> da página inicial. Em TLS, também o certificado.
+
+    O certificado do aparelho é ouro de reconhecimento: o CN e os nomes
+    alternativos (SAN) carregam o hostname interno e o nome da organização, e a
+    validade denuncia certificado vencido. A conexão TLS já acontece de qualquer
+    forma para ler o banner — pegar o certificado é de graça no mesmo handshake.
+    """
     request = (
         f"GET / HTTP/1.1\r\nHost: {ip}\r\nUser-Agent: alive\r\n"
         "Accept: */*\r\nConnection: close\r\n\r\n"
     ).encode()
+    cert_info: dict = {}
     if not tls:
         text = _read_socket(ip, port, request, timeout)
     else:
@@ -178,20 +185,26 @@ def _http_banner(ip: str, port: int, tls: bool, timeout: float) -> dict:
             with socket.create_connection((ip, port), timeout=timeout) as raw:
                 with ctx.wrap_socket(raw, server_hostname=ip) as s:
                     s.settimeout(timeout)
+                    # DER do certificado apresentado, mesmo sem validar a cadeia.
+                    der = s.getpeercert(binary_form=True)
+                    if der:
+                        cert_info = parse_cert_der(der)
                     s.sendall(request)
                     text = s.recv(8192).decode("utf-8", "replace")
         except (OSError, ValueError):
-            return {}
-    if not text:
-        return {}
-    out = {}
-    server = _header(text, "Server")
-    if server:
-        out["http_server"] = _clean(server, 40)
-    m = re.search(r"<title[^>]*>(.*?)</title>", text, re.IGNORECASE | re.DOTALL)
-    if m:
-        out["http_title"] = useful_title(_clean(m.group(1), 40))
-    return {k: v for k, v in out.items() if v}
+            return {"tls": cert_info} if cert_info else {}
+    out: dict = {}
+    if text:
+        server = _header(text, "Server")
+        if server:
+            out["http_server"] = _clean(server, 40)
+        m = re.search(r"<title[^>]*>(.*?)</title>", text, re.IGNORECASE | re.DOTALL)
+        if m:
+            out["http_title"] = useful_title(_clean(m.group(1), 40))
+    out = {k: v for k, v in out.items() if v}
+    if cert_info:
+        out["tls"] = cert_info
+    return out
 
 
 def grab_banners(
@@ -236,6 +249,299 @@ def grab_banners(
     items = list(targets.items())
     with ThreadPoolExecutor(max_workers=max(1, min(workers, len(items)))) as pool:
         list(pool.map(work, items))
+    return result
+
+
+# --------------------------------------------------------------------------- #
+# ASN.1 / DER — leitor mínimo, compartilhado por certificado X.509 e SNMP
+#
+# Os dois protocolos codificam em TLV (tag, length, value). Um único leitor de
+# TLV e um decodificador de OID servem aos dois, sem dependência externa.
+# --------------------------------------------------------------------------- #
+def _tlv(data: bytes, i: int) -> tuple[int, bytes, int]:
+    """Lê um campo TLV em ``data[i:]``. Retorna (tag, valor, próximo índice)."""
+    tag = data[i]
+    n = data[i + 1]
+    i += 2
+    if n & 0x80:  # forma longa: os 7 bits baixos dizem quantos octetos de tamanho
+        k = n & 0x7F
+        n = int.from_bytes(data[i : i + k], "big")
+        i += k
+    return tag, data[i : i + n], i + n
+
+
+def _oid_to_str(raw: bytes) -> str:
+    """Decodifica o valor de um OID DER para a forma pontilhada."""
+    if not raw:
+        return ""
+    arcs = [str(raw[0] // 40), str(raw[0] % 40)]
+    val = 0
+    for b in raw[1:]:
+        val = (val << 7) | (b & 0x7F)
+        if not b & 0x80:
+            arcs.append(str(val))
+            val = 0
+    return ".".join(arcs)
+
+
+def _encode_oid(dotted: str) -> bytes:
+    """Codifica um OID pontilhado em DER (só o valor, sem tag/length)."""
+    parts = [int(x) for x in dotted.split(".")]
+    out = bytearray([40 * parts[0] + parts[1]])
+    for n in parts[2:]:
+        if n < 0x80:
+            out.append(n)
+            continue
+        stack = []
+        while n:
+            stack.append(n & 0x7F)
+            n >>= 7
+        stack.reverse()
+        for j in range(len(stack) - 1):
+            stack[j] |= 0x80
+        out.extend(stack)
+    return bytes(out)
+
+
+# --------------------------------------------------------------------------- #
+# Certificado TLS
+#
+# Sem validar a cadeia (aparelhos usam cert self-signed), extraímos o que
+# identifica o aparelho e denuncia problema: CN do dono, CN/organização do
+# emissor, nomes alternativos (SAN — hostname interno vaza aqui), validade e se
+# é auto-assinado. Tudo parseado do DER na mão, para não puxar dependência.
+# --------------------------------------------------------------------------- #
+_OID_CN = "2.5.4.3"           # commonName
+_OID_ORG = "2.5.4.10"         # organizationName
+_OID_SAN = "2.5.29.17"        # subjectAltName
+
+
+def _name_fields(der_name: bytes) -> dict[str, str]:
+    """Extrai {oid: valor} de um Name X.509 (SEQUENCE OF RDN)."""
+    fields: dict[str, str] = {}
+    i = 0
+    while i < len(der_name):
+        _, rdn, i = _tlv(der_name, i)  # SET
+        j = 0
+        while j < len(rdn):
+            _, atv, j = _tlv(rdn, j)  # SEQUENCE {oid, value}
+            _, oid_val, k = _tlv(atv, 0)
+            _, val, _ = _tlv(atv, k)
+            oid = _oid_to_str(oid_val)
+            fields.setdefault(oid, val.decode("utf-8", "replace").strip())
+    return fields
+
+
+def _san_dns(ext_value: bytes) -> list[str]:
+    """Nomes dNSName ([2] IA5String) de um subjectAltName."""
+    names: list[str] = []
+    _, seq, _ = _tlv(ext_value, 0)  # GeneralNames SEQUENCE
+    i = 0
+    while i < len(seq):
+        tag, val, i = _tlv(seq, i)
+        if tag == 0x82:  # [2] dNSName
+            names.append(val.decode("utf-8", "replace").strip())
+    return names
+
+
+def _asn1_time(raw: bytes) -> Optional[float]:
+    """Converte UTCTime (YYMMDDHHMMSSZ) ou GeneralizedTime (YYYYMMDD...) em epoch."""
+    import calendar
+
+    s = raw.decode("ascii", "ignore").strip().rstrip("Z")
+    # descarta fração de segundo/offset, se houver; fica só o dígito de data-hora
+    s = re.split(r"[.+\-]", s)[0]
+    fmt = "%y%m%d%H%M%S" if len(s) <= 12 else "%Y%m%d%H%M%S"
+    try:
+        return calendar.timegm(time.strptime(s[:14], fmt))
+    except ValueError:
+        return None
+
+
+def parse_cert_der(der: bytes) -> dict:
+    """Extrai os campos de interesse de um certificado X.509 em DER."""
+    info: dict = {}
+    try:
+        _, cert, _ = _tlv(der, 0)             # Certificate SEQUENCE
+        _, tbs, _ = _tlv(cert, 0)             # tbsCertificate SEQUENCE
+        i = 0
+        tag, _, i = _tlv(tbs, i)
+        if tag == 0xA0:                       # [0] version, opcional
+            tag, _, i = _tlv(tbs, i)
+        # aqui já consumimos serialNumber; seguem signature, issuer, validity, subject
+        _, _, i = _tlv(tbs, i)                # signature AlgorithmIdentifier
+        _, issuer, i = _tlv(tbs, i)           # issuer Name
+        _, validity, i = _tlv(tbs, i)         # validity SEQUENCE
+        _, subject, i = _tlv(tbs, i)          # subject Name
+    except (IndexError, ValueError):
+        return info
+
+    subj = _name_fields(subject)
+    iss = _name_fields(issuer)
+    info["subject_cn"] = subj.get(_OID_CN) or subj.get(_OID_ORG)
+    info["issuer"] = iss.get(_OID_CN) or iss.get(_OID_ORG)
+    info["self_signed"] = bool(subject == issuer)
+
+    try:
+        vi = 0
+        _, _not_before, vi = _tlv(validity, vi)
+        _, not_after, _ = _tlv(validity, vi)
+        info["not_after"] = _asn1_time(not_after)
+    except (IndexError, ValueError):
+        info["not_after"] = None
+
+    # Extensões [3] -> procurar subjectAltName. ``i`` já aponta para logo após o
+    # subject dentro de ``tbs``; seguem SPKI e, opcional, as extensões.
+    try:
+        san: list[str] = []
+        j = i
+        while j < len(tbs):
+            tag, val, j = _tlv(tbs, j)
+            if tag != 0xA3:  # [3] extensions
+                continue
+            _, extseq, _ = _tlv(val, 0)
+            p = 0
+            while p < len(extseq):
+                _, ext, p = _tlv(extseq, p)  # Extension SEQUENCE
+                _, oid, q = _tlv(ext, 0)
+                if _oid_to_str(oid) != _OID_SAN:
+                    continue
+                # pode haver o BOOLEAN critical antes do OCTET STRING extnValue
+                _, octets, q = _tlv(ext, q)
+                if q < len(ext):
+                    _, octets, _ = _tlv(ext, q)
+                san = _san_dns(octets)
+            break
+        if san:
+            info["san"] = san[:8]
+    except (IndexError, ValueError):
+        pass
+
+    return {key: v for key, v in info.items() if v not in (None, "", [])}
+
+
+# --------------------------------------------------------------------------- #
+# SNMP (161/UDP) — community "public"
+#
+# O default de fábrica de quase toda impressora, switch e access point. Só
+# leitura: um GetRequest de sysDescr e sysName devolve modelo, firmware e o nome
+# configurado do aparelho — e um host que responde a "public" é, por si só, um
+# achado. Não há brute force de community: só o default universalmente conhecido.
+# --------------------------------------------------------------------------- #
+SNMP_COMMUNITY = "public"
+_OID_SYS_DESCR = "1.3.6.1.2.1.1.1.0"
+_OID_SYS_NAME = "1.3.6.1.2.1.1.5.0"
+
+
+def _ber(tag: int, value: bytes) -> bytes:
+    """Empacota um TLV BER com tamanho em forma curta ou longa."""
+    n = len(value)
+    if n < 0x80:
+        return bytes([tag, n]) + value
+    length = n.to_bytes((n.bit_length() + 7) // 8, "big")
+    return bytes([tag, 0x80 | len(length)]) + length + value
+
+
+def _ber_int(n: int) -> bytes:
+    length = max(1, (n.bit_length() + 8) // 8)
+    return _ber(0x02, n.to_bytes(length, "big"))
+
+
+def build_snmp_get(oids: list[str], request_id: int, community: str) -> bytes:
+    """Monta um GetRequest SNMPv1 para os OIDs dados."""
+    varbinds = b"".join(
+        _ber(0x30, _ber(0x06, _encode_oid(o)) + _ber(0x05, b""))  # OID + NULL
+        for o in oids
+    )
+    pdu = _ber(
+        0xA0,  # GetRequest-PDU
+        _ber_int(request_id) + _ber_int(0) + _ber_int(0) + _ber(0x30, varbinds),
+    )
+    return _ber(
+        0x30,
+        _ber_int(0)  # version 1 == 0
+        + _ber(0x04, community.encode("ascii"))
+        + pdu,
+    )
+
+
+def parse_snmp_response(data: bytes) -> dict[str, str]:
+    """Extrai {oid: valor de texto} de um GetResponse SNMP."""
+    out: dict[str, str] = {}
+    try:
+        _, msg, _ = _tlv(data, 0)             # SEQUENCE
+        i = 0
+        _, _ver, i = _tlv(msg, i)
+        _, _community, i = _tlv(msg, i)
+        _, pdu, _ = _tlv(msg, i)              # GetResponse-PDU (0xA2)
+        j = 0
+        _, _rid, j = _tlv(pdu, j)
+        _, err, j = _tlv(pdu, j)
+        if err and err[0] != 0:               # error-status != noError
+            return out
+        _, _eidx, j = _tlv(pdu, j)
+        _, vblist, _ = _tlv(pdu, j)           # SEQUENCE OF VarBind
+        p = 0
+        while p < len(vblist):
+            _, vb, p = _tlv(vblist, p)
+            q = 0
+            _, oid, q = _tlv(vb, q)
+            vtag, vval, _ = _tlv(vb, q)
+            if vtag == 0x04:                  # OCTET STRING
+                text = vval.decode("utf-8", "replace")
+                text = _CLEAN_RE.sub(" ", text).strip()
+                if text:
+                    out[_oid_to_str(oid)] = re.sub(r"\s+", " ", text)
+    except (IndexError, ValueError):
+        return out
+    return out
+
+
+def _snmp_one(ip: str, community: str, timeout: float) -> Optional[dict]:
+    import os
+
+    req_id = int.from_bytes(os.urandom(2), "big") or 1
+    packet = build_snmp_get([_OID_SYS_DESCR, _OID_SYS_NAME], req_id, community)
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.settimeout(timeout)
+            s.sendto(packet, (ip, 161))
+            data, _ = s.recvfrom(4096)
+    except OSError:
+        return None
+    fields = parse_snmp_response(data)
+    if not fields:
+        return None
+    out: dict = {"community": community}
+    descr = fields.get(_OID_SYS_DESCR)
+    name = fields.get(_OID_SYS_NAME)
+    if descr:
+        out["descr"] = descr[:120]
+    if name:
+        out["name"] = name[:60]
+    return out
+
+
+def query_snmp(
+    ips: list[str],
+    community: str = SNMP_COMMUNITY,
+    timeout: float = 1.0,
+    workers: int = 64,
+) -> dict[str, dict]:
+    """Consulta sysDescr/sysName via SNMP em cada host. Retorna {ip: {...}}."""
+    if not ips:
+        return {}
+    result: dict[str, dict] = {}
+    lock = threading.Lock()
+
+    def work(ip: str) -> None:
+        info = _snmp_one(ip, community, timeout)
+        if info:
+            with lock:
+                result[ip] = info
+
+    with ThreadPoolExecutor(max_workers=max(1, min(workers, len(ips)))) as pool:
+        list(pool.map(work, ips))
     return result
 
 

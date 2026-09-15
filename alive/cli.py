@@ -153,6 +153,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="pular a consulta de nomes NetBIOS [dim](Windows, Samba, NAS)[/dim].",
     )
     veloc.add_argument(
+        "--no-snmp", action="store_true",
+        help="pular a consulta SNMP com community public [dim](impressora, switch, AP)[/dim].",
+    )
+    veloc.add_argument(
         "--upnp-time", type=float, default=2.5, metavar="SEG",
         help="tempo ouvindo respostas SSDP/UPnP [dim](padrão: 2.5s)[/dim].",
     )
@@ -268,6 +272,7 @@ def _apply_passive(args: argparse.Namespace) -> None:
     args.no_ports = True
     args.no_netbios = True
     args.no_upnp = True
+    args.no_snmp = True
 
 
 def _exit_code(found: list, fail_on: Optional[str]) -> int:
@@ -290,6 +295,7 @@ def _apply_fast(args: argparse.Namespace) -> None:
     args.no_ports = True
     args.no_upnp = True
     args.no_netbios = True
+    args.no_snmp = True
 
 
 def run(args: argparse.Namespace) -> int:
@@ -435,9 +441,13 @@ def _collect(
     netbios = {} if args.no_netbios else _staged(
         args, quiet, "consultando NetBIOS", lambda: probe.query_netbios(ips)
     )
-    # Banners só fazem sentido depois de saber quais portas estão abertas.
+    snmp = {} if getattr(args, "no_snmp", False) else _staged(
+        args, quiet, "consultando SNMP (public)", lambda: probe.query_snmp(ips)
+    )
+    # Banners só fazem sentido depois de saber quais portas estão abertas. O
+    # certificado TLS vem junto, do mesmo handshake dos hosts com HTTPS.
     banners = {} if args.no_ports else _staged(
-        args, quiet, "lendo banners", lambda: probe.grab_banners(ports)
+        args, quiet, "lendo banners e certificados", lambda: probe.grab_banners(ports)
     )
 
     # O gateway conta, via UPnP, o IP público, o uptime do link e — o que mais
@@ -465,11 +475,18 @@ def _collect(
 
         m = mdns.get(ip, {})
         u = upnp.get(ip, {})
-        b = banners.get(ip, {})
+        # O certificado TLS vem dentro dos banners; separamos para não poluir o
+        # texto de classificação nem a coluna de banner com o dict do cert.
+        b = dict(banners.get(ip, {}))
+        tls = b.pop("tls", None)
+        s = snmp.get(ip, {})
         services = set(m.get("services") or []) | set(ports.get(ip) or [])
         hostname = hostnames.get(ip)
-        # Ordem de preferência de nome: mDNS (mais amigável) > UPnP > NetBIOS > rDNS.
-        name = m.get("name") or u.get("name") or netbios.get(ip) or hostname
+        # Ordem de nome: mDNS (mais amigável) > UPnP > SNMP sysName > NetBIOS > rDNS.
+        name = (
+            m.get("name") or u.get("name") or s.get("name")
+            or netbios.get(ip) or hostname
+        )
         vendor = (vendors.get(mac) if mac else None) or u.get("manufacturer")
         # Modelo: o aparelho dizendo o que é (TXT do mDNS) vale mais que o UPnP.
         model = m.get("model") or u.get("model")
@@ -480,6 +497,7 @@ def _collect(
             mdns_name=m.get("name"), services=services,
             gateway=netinfo.gateway, upnp=u,
             model=model, banners=b, os_family=os_family,
+            snmp=s, tls=tls,
         )
         # O host local é a máquina que roda o alive: é computador, sem palpite.
         # (Macs e notebooks Linux também usam MAC aleatório na WiFi, o que sem
@@ -497,6 +515,8 @@ def _collect(
                 "model": model,
                 "services": services,
                 "banners": b,
+                "snmp": s,
+                "tls": tls,
                 "device": dev,
                 "inferred": inferred,
                 "random_mac": scanner.is_random_mac(mac),

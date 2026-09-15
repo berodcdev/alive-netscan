@@ -256,6 +256,8 @@ def detail_text(host: dict) -> str:
     banner de servidor > família de SO pelo TTL. Alertas curtos vão no fim.
     """
     banners = host.get("banners") or {}
+    snmp = host.get("snmp") or {}
+    tls = host.get("tls") or {}
     bits: list[str] = []
 
     # Tudo aqui veio da rede (nome, banner, modelo): escapar antes de virar
@@ -265,10 +267,17 @@ def detail_text(host: dict) -> str:
         bits.append(f"[white]{escape(model)}[/white]")
 
     if not model:
-        for key in ("http_title", "http_server", "rtsp_server", "ssh"):
-            if banners.get(key):
-                bits.append(f"[white]{escape(str(banners[key]))}[/white]")
-                break
+        # sysDescr do SNMP é frequentemente o dado mais rico ("Linux nas 5.10").
+        if snmp.get("descr"):
+            bits.append(f"[white]{escape(str(snmp['descr']))}[/white]")
+        else:
+            for key in ("http_title", "http_server", "rtsp_server", "ssh"):
+                if banners.get(key):
+                    bits.append(f"[white]{escape(str(banners[key]))}[/white]")
+                    break
+            else:
+                if tls.get("subject_cn"):
+                    bits.append(f"[white]{escape(str(tls['subject_cn']))}[/white]")
     elif banners.get("ssh"):
         bits.append(escape(str(banners["ssh"])))
 
@@ -530,6 +539,8 @@ def to_json(
                 "type_inferred": bool(h.get("inferred")),
                 "os_family": h.get("os_family"),
                 "banners": h.get("banners") or {},
+                "snmp": h.get("snmp") or {},
+                "tls": h.get("tls") or {},
                 "services": sorted(h.get("services") or []),
                 "rtt_ms": h.get("rtt"),
                 "ttl": h.get("ttl"),

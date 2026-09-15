@@ -196,3 +196,22 @@ class TestExitCode:
 
     def test_fail_on_baixo_pega_qualquer_coisa(self):
         assert cli._exit_code(self._achados("baixo"), "baixo") == 3
+
+
+class TestFlagsSnmp:
+    def test_flag_no_snmp_existe(self):
+        from alive import cli
+        args = cli.build_parser().parse_args(["--no-snmp"])
+        assert args.no_snmp is True
+
+    def test_passivo_desliga_snmp(self):
+        from alive import cli
+        args = cli.build_parser().parse_args(["--passive"])
+        cli._apply_passive(args)
+        assert args.no_snmp is True
+
+    def test_fast_desliga_snmp(self):
+        from alive import cli
+        args = cli.build_parser().parse_args(["--fast"])
+        cli._apply_fast(args)
+        assert args.no_snmp is True

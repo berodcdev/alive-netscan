@@ -228,3 +228,113 @@ class TestHeaderVazio:
     def test_nome_com_hifen(self):
         resp = "RTSP/1.0 200 OK\r\nContent-Type: application/sdp\r\n\r\n"
         assert probe._header(resp, "Content-Type") == "application/sdp"
+
+
+# Certificado X.509 auto-assinado real (openssl), CN=nas.local, O=Synology Inc.,
+# SAN DNS nas.local + nas.example.com, válido até 2036. Fixture determinística.
+_CERT_B64 = (
+    "MIIDZzCCAk+gAwIBAgIUYfQL2pTfezEfgzjYL8L76tRCcpkwDQYJKoZIhvcNAQEL"
+    "BQAwLDESMBAGA1UEAwwJbmFzLmxvY2FsMRYwFAYDVQQKDA1TeW5vbG9neSBJbmMu"
+    "MB4XDTI2MDkxNTIxMDYzMVoXDTM2MDkxMjIxMDYzMVowLDESMBAGA1UEAwwJbmFz"
+    "LmxvY2FsMRYwFAYDVQQKDA1TeW5vbG9neSBJbmMuMIIBIjANBgkqhkiG9w0BAQEF"
+    "AAOCAQ8AMIIBCgKCAQEA9I1xuAWTiEwjXs/2Bi1S8fci22xxi60Q5P7qbZFe/gJ"
+    "X1b3RR9hLltO1xf+4WtQ0fvBBMXNgeC19cqMlH7tx7YNgXtqR0xcHgEdaaXHSdzj"
+    "jx1mP9ReMwXu8s8eR/ztffqLrI/GwDG5zRgPEgwGV2ZyROkGCm2EzPZXE1fURyg"
+    "er9x1mRB36c666smW2qr1rXJRPwBLbQa9xbGew0452Be0x7+0Erg0toI3PZYJ0Z"
+    "hcVCCMgFSskpg597OYsloOun8SeUfJ1F2tXPbJ3w0f0qt894e1kMF/EZu6HP6QO"
+    "evSXmU5AX6SP0vYH+bomGz5Cg4RIjKcCNOIXH+3hSHFPjQIDAQABo4GAMH4wHQYD"
+    "VR0OBBYEFBM+PvM4xetTdMrQBAFXOaTD/x9cMB8GA1UdIwQYMBaAFBM+PvM4xetT"
+    "dMrQBAFXOaTD/x9cMA8GA1UdEwEB/wQFMAMBAf8wKwYDVR0RBCQwIoIJbmFzLmxv"
+    "Y2Fsgg9uYXMuZXhhbXBsZS5jb22HBMCoADIwDQYJKoZIhvcNAQELBQADggEBABiy"
+    "yis2FHdSdLLNR/xnBncWGND91nIiSfcOonJ7Sy245zOkDdkS1zJVlT6Na/wr9an"
+    "kpcI+TsCLktQE2kvL6KEpmbUuuauTk2CQ59Mg+IEJw9hOo8oU19fr5Vf6mK9JgM"
+    "rqs7NUnBrHyAv6UlSstVY3UbbogQO1znsXojgBT7ikyirP5eGihVILwVlA7uRM8"
+    "esE2bo7sGclm8Pc3Ay632Iwgfar4JjfVjTfLjW/9YosGkxp7K+NImKMImU5oBmj"
+    "ppTXW0JAaOciT0OJohmuAtimWTIc4H/bpdaRXKaQh3SnskUqs0CATqSFA2WkTt/"
+    "OZTwEKtYe3UClopMFkjUJqlM="
+)
+
+
+class TestOid:
+    @pytest.mark.parametrize(
+        "dotted",
+        ["1.3.6.1.2.1.1.1.0", "2.5.4.3", "2.5.29.17", "1.2.840.113549.1.1.11"],
+    )
+    def test_encode_decode_ida_e_volta(self, dotted):
+        assert probe._oid_to_str(probe._encode_oid(dotted)) == dotted
+
+
+class TestCertTLS:
+    def _cert(self):
+        import base64
+        return probe.parse_cert_der(base64.b64decode(_CERT_B64))
+
+    def test_extrai_cn_do_dono(self):
+        assert self._cert()["subject_cn"] == "nas.local"
+
+    def test_extrai_emissor(self):
+        assert self._cert()["issuer"] == "nas.local"
+
+    def test_detecta_auto_assinado(self):
+        assert self._cert()["self_signed"] is True
+
+    def test_extrai_san_dns(self):
+        assert self._cert()["san"] == ["nas.local", "nas.example.com"]
+
+    def test_san_ignora_entradas_que_nao_sao_dns(self):
+        """O certificado tem um SAN de IP; só os nomes DNS entram."""
+        assert all("." in n and not n[0].isdigit() for n in self._cert()["san"])
+
+    def test_validade_no_futuro(self):
+        import time
+        assert self._cert()["not_after"] > time.time()
+
+    def test_der_invalido_nao_quebra(self):
+        assert probe.parse_cert_der(b"\x30\x03lixo") == {}
+
+    def test_der_vazio(self):
+        assert probe.parse_cert_der(b"") == {}
+
+
+class TestSnmp:
+    def _resposta(self, descr, name, err=0, request_id=0x1234):
+        """Monta um GetResponse SNMP com os dois OIDs."""
+        def octstr(s):
+            return probe._ber(0x04, s.encode())
+
+        def oid(o):
+            return probe._ber(0x06, probe._encode_oid(o))
+
+        vbs = b""
+        if descr is not None:
+            vbs += probe._ber(0x30, oid(probe._OID_SYS_DESCR) + octstr(descr))
+        if name is not None:
+            vbs += probe._ber(0x30, oid(probe._OID_SYS_NAME) + octstr(name))
+        pdu = probe._ber(
+            0xA2,
+            probe._ber_int(request_id) + probe._ber_int(err) + probe._ber_int(0)
+            + probe._ber(0x30, vbs),
+        )
+        return probe._ber(0x30, probe._ber_int(0) + octstr("public") + pdu)
+
+    def test_request_bem_formado(self):
+        pkt = probe.build_snmp_get(
+            [probe._OID_SYS_DESCR, probe._OID_SYS_NAME], 0x1234, "public"
+        )
+        assert pkt[0] == 0x30 and b"public" in pkt
+
+    def test_parse_extrai_descr_e_nome(self):
+        resp = self._resposta("Linux nas 5.10 armv7l", "nas-sala")
+        out = probe.parse_snmp_response(resp)
+        assert out[probe._OID_SYS_DESCR] == "Linux nas 5.10 armv7l"
+        assert out[probe._OID_SYS_NAME] == "nas-sala"
+
+    def test_error_status_descarta_resposta(self):
+        assert probe.parse_snmp_response(self._resposta("x", "y", err=2)) == {}
+
+    def test_resposta_lixo_nao_quebra(self):
+        assert probe.parse_snmp_response(b"\x30\x02\x00\x00") == {}
+
+    def test_colapsa_espacos_e_controle(self):
+        out = probe.parse_snmp_response(self._resposta("HP\x00\r\n  LaserJet", None))
+        assert out[probe._OID_SYS_DESCR] == "HP LaserJet"

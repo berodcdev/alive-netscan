@@ -19,8 +19,9 @@ IP, MAC, fabricante e o **tipo** provável de cada aparelho — `ROTEADOR`, `RED
 
 Funciona em **macOS e Linux** sem exigir root: usa `nmap` quando disponível e, caso
 contrário, faz um *ping sweep* paralelo combinado com a tabela ARP. Nome e tipo vêm de
-cinco sinais independentes — DNS reverso, mDNS/Bonjour, NetBIOS, SSDP/UPnP e fingerprint
-por portas TCP — mais a base de fabricantes OUI (offline).
+sete sinais independentes — DNS reverso, mDNS/Bonjour, NetBIOS, SSDP/UPnP, fingerprint
+por portas TCP, SNMP (`sysDescr`) e o certificado TLS do aparelho — mais a base de
+fabricantes OUI (offline).
 
 Com `--watch`, fica monitorando e avisa **quem entra e quem sai** da rede. E ao final de cada
 varredura lista os **achados**: serviço em texto puro exposto, câmera com RTSP aberto, ADB
@@ -100,11 +101,11 @@ já troca sozinha). Cobre menos, mas não deixa rastro em IDS nem acorda aparelh
 | **Rede** | interface, IP, subrede, gateway, SSID, canal/sinal do WiFi e DNS em uso (avisa se a rota padrão sai por VPN) |
 | **Scan** | `nmap -sn` (se houver) + ping sweep paralelo, guardando RTT e TTL; **a tabela ARP também é fonte de hosts** — é assim que aparecem os aparelhos que ignoram ping. O estado do vizinho é lido junto: quem veio de cache não revalidado é marcado como `ARP obsoleto`, não como presença confirmada |
 | **Nomes** | DNS reverso, mDNS/Bonjour, NetBIOS (Windows/Samba) e `friendlyName` do UPnP |
-| **Modelo** | TXT do mDNS (`MacBook Air`, `Chromecast Ultra`, modelo da impressora), banner de SSH/HTTP/RTSP e família de SO pelo TTL |
-| **Fingerprint** | fabricante por OUI (offline) + ~22 portas TCP que identificam o aparelho |
+| **Modelo** | TXT do mDNS (`MacBook Air`, `Chromecast Ultra`, modelo da impressora), `sysDescr` do SNMP, CN do certificado TLS, banner de SSH/HTTP/RTSP e família de SO pelo TTL |
+| **Fingerprint** | fabricante por OUI (offline) + ~22 portas TCP + SNMP `public` + certificado TLS (CN/SAN) que identificam o aparelho |
 | **Classificação** | combina modelo, fabricante, serviços, portas, UPnP e hostname — marca `?` quando é palpite |
 | **Histórico** | compara com o scan anterior: marca quem é `NOVO`, quem saiu e há quanto tempo cada um é conhecido |
-| **Achados** | serviços expostos, MAC duplicado, sinais de ARP spoofing no gateway (MITM) e os redirecionamentos de porta ativos no roteador — cada um com o que fazer a respeito |
+| **Achados** | serviços expostos, MAC duplicado, sinais de ARP spoofing no gateway (MITM), SNMP `public` aberto, certificado TLS vencido e os redirecionamentos de porta ativos no roteador — cada um com o que fazer a respeito |
 
 Sem `nmap` ou sem `sudo`, o `alive` ainda funciona — apenas pode não ver aparelhos que
 ignoram ping. Instalar `nmap` e/ou rodar com `sudo` melhora a cobertura de MACs.
@@ -193,10 +194,12 @@ host interno arbitrário. Nomes e banners vindos da rede são sempre escapados
 antes de ir para a tela.
 
 As sondas ativas se limitam a: um ping por host, uma conexão TCP em ~22 portas que
-*identificam* o aparelho, e a leitura do banner de quem já estava com a porta
-aberta. Não há teste de credencial, força bruta nem exploração. O TLS não é
-verificado ao ler banner HTTPS, porque aparelhos de LAN usam certificado
-autoassinado — nenhum dado é enviado, só lido.
+*identificam* o aparelho, a leitura do banner de quem já estava com a porta aberta,
+um GetRequest SNMP só-leitura com a community padrão `public` e a leitura do
+certificado que o host apresenta no handshake TLS. Não há teste de credencial,
+força bruta de community nem exploração — só o `public` universalmente conhecido, e
+só leitura. O TLS não é verificado ao ler banner HTTPS, porque aparelhos de LAN usam
+certificado autoassinado — nenhum dado é enviado, só lido.
 
 ## Licença
 

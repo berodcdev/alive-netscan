@@ -98,12 +98,24 @@ def _vendor_has(vendor: str, *keys: str) -> bool:
     )
 
 
-# Software de servidor web embarcado -> o aparelho que costuma rodá-lo.
+# Software de servidor web embarcado, sysDescr do SNMP ou CN do certificado ->
+# o aparelho que costuma emitir esse texto.
 _BANNER_HINTS: list[tuple[tuple[str, ...], DeviceType]] = [
-    (("goahead", "hikvision", "dahua", "webs", "jaws", "ipcamera"), CAMERA),
-    (("dropbear", "openwrt", "routeros", "mikrotik", "dd-wrt", "lighttpd/1.4.4"), NETDEV),
-    (("cups", "jetdirect", "hp http server"), PRINTER),
-    (("ubuntu", "debian", "raspbian", "raspberry"), SBC),
+    (("goahead", "hikvision", "dahua", "webs", "jaws", "ipcamera", "axis"), CAMERA),
+    (
+        (
+            "dropbear", "openwrt", "routeros", "mikrotik", "dd-wrt", "lighttpd/1.4.4",
+            "cisco", "juniper", "aruba", "fortigate", "fortinet", "ubnt", "edgeos",
+            "unifi", "zyxel",
+        ),
+        NETDEV,
+    ),
+    (
+        ("cups", "jetdirect", "hp http server", "hp ethernet", "laserjet",
+         "officejet", "kyocera", "lexmark", "brother"),
+        PRINTER,
+    ),
+    (("ubuntu", "debian", "raspbian", "raspberry", "synology", "qnap", "truenas"), SBC),
 ]
 
 
@@ -120,17 +132,28 @@ def classify(
     model: Optional[str] = None,
     banners: Optional[dict] = None,
     os_family: Optional[str] = None,
+    snmp: Optional[dict] = None,
+    tls: Optional[dict] = None,
 ) -> tuple[DeviceType, bool]:
     """Combina os sinais disponíveis e retorna (tipo mais provável, é_palpite)."""
     services = services or set()
     upnp = upnp or {}
     banners = banners or {}
+    snmp = snmp or {}
+    tls = tls or {}
     v = (vendor or "").lower()
     upnp_text = " ".join(
         filter(None, [upnp.get("server"), upnp.get("model"), upnp.get("name")])
     ).lower()
     upnp_types = " ".join(upnp.get("types") or ()).lower()
     banner_text = " ".join(str(x) for x in banners.values() if x).lower()
+    # sysDescr do SNMP e CN/SAN do certificado costumam dizer o modelo em texto
+    # claro ("HP LaserJet", "RouterOS", "Synology") — fortes sinais de tipo.
+    snmp_text = " ".join(filter(None, [snmp.get("descr"), snmp.get("name")])).lower()
+    tls_text = " ".join(
+        filter(None, [tls.get("subject_cn"), tls.get("issuer"), *(tls.get("san") or [])])
+    ).lower()
+    banner_text = " ".join(filter(None, [banner_text, snmp_text, tls_text]))
     text = " ".join(
         filter(None, [hostname, mdns_name, model, upnp_text, banner_text])
     ).lower()

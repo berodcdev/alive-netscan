@@ -7,6 +7,7 @@ nada de exploração. Só a leitura honesta do que está exposto na sua LAN.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -218,6 +219,34 @@ def collect(
             )
         )
 
+    # SNMP com community "public" respondendo: o default de fábrica, leitura
+    # aberta da configuração do aparelho para qualquer um na LAN.
+    for h in hosts:
+        snmp = h.get("snmp") or {}
+        if snmp.get("community") == "public":
+            out.append(
+                Finding(
+                    "medio", h["ip"],
+                    f"{_label(h)}: SNMP responde à community padrão 'public' — "
+                    "qualquer um na rede lê a configuração do aparelho",
+                    "troque a community padrão ou desligue o SNMP se não usa",
+                )
+            )
+
+    # Certificado TLS vencido: hosts com HTTPS cuja validade já passou.
+    for h in hosts:
+        tls = h.get("tls") or {}
+        not_after = tls.get("not_after")
+        if not_after and not_after < time.time():
+            out.append(
+                Finding(
+                    "baixo", h["ip"],
+                    f"{_label(h)}: certificado TLS vencido "
+                    f"({tls.get('subject_cn') or 'sem CN'})",
+                    "renove o certificado do aparelho",
+                )
+            )
+
     out.sort(key=lambda f: (SEVERITY_ORDER.get(f.severity, 9), f.ip or ""))
     return out
 
@@ -229,4 +258,9 @@ def short_notes(host: dict) -> list[str]:
     for svc in ("telnet", "adb", "vnc", "ftp"):
         if svc in services:
             notes.append(f"{svc} aberto!")
+    if (host.get("snmp") or {}).get("community") == "public":
+        notes.append("snmp público!")
+    tls = host.get("tls") or {}
+    if tls.get("not_after") and tls["not_after"] < time.time():
+        notes.append("cert vencido!")
     return notes

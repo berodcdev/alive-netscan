@@ -3,6 +3,27 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/);
 versionamento [SemVer](https://semver.org/lang/pt-BR/).
 
+## [0.6.0] — 2026-09-15
+
+### Adicionado
+- **Consulta SNMP** (161/UDP, community `public`) — o default de fábrica de quase
+  toda impressora, switch e access point. Um GetRequest só-leitura de `sysDescr`
+  e `sysName` traz modelo, firmware e o nome configurado do aparelho, e alimenta
+  a classificação (HP -> impressora, Cisco/RouterOS -> rede). Sem brute force de
+  community: só o default universalmente conhecido. Desligável com `--no-snmp`;
+  fora do `--passive` e do `--fast`. Um host que responde a `public` vira achado
+  `medio`: qualquer um na LAN lê a configuração.
+- **Captura do certificado TLS** no mesmo handshake que já lê o banner HTTPS.
+  Extrai CN do dono, emissor, nomes alternativos (SAN — o hostname interno vaza
+  aqui), validade e se é auto-assinado. Parser X.509 escrito sobre um leitor
+  ASN.1/DER mínimo, sem dependência nova. O CN e o SAN alimentam a classificação
+  (Synology -> servidor); certificado vencido vira achado `baixo`.
+- SNMP e certificado saem na tabela (coluna DETALHE, com marca `snmp público!` /
+  `cert vencido!`) e completos no `--json`.
+- Assinaturas de `sysDescr`/certificado no mapa de classificação: Cisco, Juniper,
+  Aruba, FortiGate, UniFi (rede); Kyocera, Lexmark, Brother (impressora);
+  Synology, QNAP, TrueNAS (servidor); Axis (câmera).
+
 ## [0.5.0] — 2026-09-15
 
 ### Adicionado

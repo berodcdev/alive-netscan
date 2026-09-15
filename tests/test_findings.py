@@ -222,3 +222,44 @@ class TestMitm:
     def test_sem_gateway_nenhuma_regra_mitm_dispara(self):
         hosts = [host(self.GW, mac="6e:00:11:22:33:44", random_mac=True)]
         assert findings.collect(hosts) == []
+
+
+class TestSnmpPublico:
+    def test_community_public_vira_achado(self):
+        h = host("192.168.0.20", snmp={"community": "public", "descr": "HP"})
+        (a,) = [f for f in findings.collect([h]) if "SNMP" in f.message]
+        assert a.severity == "medio"
+        assert "public" in a.message and a.fix
+
+    def test_sem_snmp_nao_alarma(self):
+        h = host("192.168.0.20", snmp={})
+        assert [f for f in findings.collect([h]) if "SNMP" in f.message] == []
+
+    def test_nota_na_coluna(self):
+        h = host("192.168.0.20", snmp={"community": "public"})
+        assert "snmp público!" in findings.short_notes(h)
+
+
+class TestCertVencido:
+    def test_certificado_vencido_vira_achado(self):
+        import time
+        h = host("192.168.0.50", tls={"subject_cn": "old.local",
+                                       "not_after": time.time() - 86400})
+        (a,) = [f for f in findings.collect([h]) if "certificado" in f.message]
+        assert a.severity == "baixo"
+        assert "old.local" in a.message
+
+    def test_certificado_valido_nao_alarma(self):
+        import time
+        h = host("192.168.0.50", tls={"subject_cn": "ok.local",
+                                      "not_after": time.time() + 86400 * 365})
+        assert [f for f in findings.collect([h]) if "certificado" in f.message] == []
+
+    def test_sem_validade_nao_alarma(self):
+        h = host("192.168.0.50", tls={"subject_cn": "x", "self_signed": True})
+        assert [f for f in findings.collect([h]) if "certificado" in f.message] == []
+
+    def test_nota_cert_vencido(self):
+        import time
+        h = host("192.168.0.50", tls={"not_after": time.time() - 1})
+        assert "cert vencido!" in findings.short_notes(h)
