@@ -9,6 +9,7 @@ Tudo aqui é best-effort e com deadline: nenhuma sonda pode travar o scan.
 
 from __future__ import annotations
 
+import html
 import re
 import socket
 import struct
@@ -16,6 +17,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Optional
+from urllib.parse import urljoin, urlsplit, urlunsplit
 
 # --------------------------------------------------------------------------- #
 # Fingerprint por porta TCP
@@ -101,7 +103,9 @@ _CLEAN_RE = re.compile(r"[\x00-\x1f\x7f]")
 def _clean(text: Optional[str], limit: int = 60) -> Optional[str]:
     if not text:
         return None
-    s = _CLEAN_RE.sub(" ", text).strip()
+    # A página do aparelho serve o <title> com entidades HTML: sem decodificar,
+    # o modelo "Z13220" chega na tela como "&#90;&#49;&#51;&#50;&#50;&#48;".
+    s = _CLEAN_RE.sub(" ", html.unescape(text)).strip()
     s = re.sub(r"\s+", " ", s)
     if not s:
         return None
@@ -236,6 +240,55 @@ def _header(text: str, name: str) -> Optional[str]:
     return m.group(1).strip() if m else None
 
 
+# --------------------------------------------------------------------------- #
+# URLs anunciadas por aparelhos — entrada não confiável
+#
+# O LOCATION do SSDP é escolhido pelo aparelho, não por nós: qualquer coisa na
+# LAN pode anunciar o que quiser. Sem validar, o urlopen aceitaria
+# `file:///etc/passwd` (lê o arquivo e joga o conteúdo na tabela) ou apontaria
+# para um host interno arbitrário, transformando o alive em proxy de varredura.
+# Só seguimos http do próprio IP que respondeu, e sem redirecionamento — sair
+# do aparelho anularia exatamente a checagem de origem.
+# --------------------------------------------------------------------------- #
+def safe_device_url(url: Optional[str], device_ip: str) -> Optional[str]:
+    """Devolve a URL se ela for ``http://`` do próprio ``device_ip``; senão None."""
+    if not url or not device_ip:
+        return None
+    try:
+        parts = urlsplit(url.strip())
+    except ValueError:
+        return None
+    if parts.scheme != "http" or (parts.hostname or "") != device_ip:
+        return None
+    return urlunsplit(parts)
+
+
+_OPENER = None
+
+
+def _no_redirect_opener():
+    """Opener que recusa redirecionamento (construído uma vez, sob demanda)."""
+    global _OPENER
+    if _OPENER is None:
+        from urllib.request import HTTPRedirectHandler, build_opener
+
+        class _NoRedirect(HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, headers, newurl):
+                return None
+
+        _OPENER = build_opener(_NoRedirect)
+    return _OPENER
+
+
+def _fetch_device(url: str, timeout: float, limit: int) -> Optional[str]:
+    """Baixa uma URL já validada por :func:`safe_device_url`. None em qualquer erro."""
+    try:
+        with _no_redirect_opener().open(url, timeout=timeout) as resp:
+            return resp.read(limit).decode("utf-8", "replace")
+    except Exception:  # noqa: BLE001 - aparelho pode recusar, sumir ou redirecionar
+        return None
+
+
 def new_ssdp_entry() -> dict:
     """Registro vazio de um aparelho SSDP. Única fonte da verdade do formato."""
     return {
@@ -313,14 +366,14 @@ def discover_ssdp(duration: float = 2.5, details: bool = True) -> dict[str, dict
 
 def _fill_upnp_details(results: dict[str, dict], locations: dict[str, str]) -> None:
     """Baixa o XML de descrição UPnP de cada host (paralelo, com deadline)."""
-    from urllib.request import urlopen
 
     def fetch(item: tuple[str, str]) -> None:
         ip, url = item
-        try:
-            with urlopen(url, timeout=1.5) as resp:  # noqa: S310 - URL vem da própria LAN
-                xml = resp.read(65536).decode("utf-8", "replace")
-        except Exception:  # noqa: BLE001 - aparelho pode não servir o XML
+        safe = safe_device_url(url, ip)
+        if not safe:
+            return
+        xml = _fetch_device(safe, timeout=1.5, limit=65536)
+        if not xml:
             return
         entry = results.setdefault(ip, new_ssdp_entry())
         friendly = _tag(xml, "friendlyName")
@@ -352,8 +405,11 @@ _WAN_TYPES = ("WANIPConnection", "WANPPPConnection")
 
 
 def _soap(url: str, service_type: str, action: str, body: str = "", timeout: float = 2.0):
-    """Faz uma chamada SOAP UPnP e devolve o XML de resposta (ou None)."""
-    from urllib.request import Request, urlopen
+    """Faz uma chamada SOAP UPnP e devolve o XML de resposta (ou None).
+
+    ``url`` tem de vir de :func:`safe_device_url`.
+    """
+    from urllib.request import Request
 
     envelope = (
         '<?xml version="1.0"?>'
@@ -371,39 +427,43 @@ def _soap(url: str, service_type: str, action: str, body: str = "", timeout: flo
         },
     )
     try:
-        with urlopen(req, timeout=timeout) as resp:  # noqa: S310 - alvo é o gateway da LAN
+        with _no_redirect_opener().open(req, timeout=timeout) as resp:
             return resp.read(65536).decode("utf-8", "replace")
     except Exception:  # noqa: BLE001 - roteador pode recusar ou não implementar
         return None
 
 
-def _find_wan_service(xml: str, base: str) -> Optional[tuple[str, str]]:
-    """Acha (serviceType, controlURL absoluto) do serviço WAN na descrição UPnP."""
-    from urllib.parse import urljoin
+def _find_wan_service(xml: str, base: str, device_ip: str) -> Optional[tuple[str, str]]:
+    """Acha (serviceType, controlURL absoluto) do serviço WAN na descrição UPnP.
 
+    O controlURL vem do XML do aparelho e pode ser absoluto apontando para
+    qualquer lugar — por isso passa pela mesma validação de origem.
+    """
     for block in re.findall(r"<service>(.*?)</service>", xml, re.DOTALL | re.IGNORECASE):
         stype = _tag(block, "serviceType")
         ctrl = _tag(block, "controlURL")
         if stype and ctrl and any(t in stype for t in _WAN_TYPES):
-            return stype, urljoin(base, ctrl)
+            url = safe_device_url(urljoin(base, ctrl), device_ip)
+            if url:
+                return stype, url
     return None
 
 
 def gateway_wan_info(location: str, max_mappings: int = 24) -> dict:
     """Interroga o gateway via UPnP. Retorna ip público, uptime e mapeamentos."""
-    from urllib.request import urlopen
-
     info: dict = {}
-    try:
-        with urlopen(location, timeout=2.0) as resp:  # noqa: S310 - gateway da LAN
-            xml = resp.read(131072).decode("utf-8", "replace")
-    except Exception:  # noqa: BLE001
+    device_ip = urlsplit(location).hostname or ""
+    safe = safe_device_url(location, device_ip)
+    if not safe:
+        return info
+    xml = _fetch_device(safe, timeout=2.0, limit=131072)
+    if not xml:
         return info
 
     info["model"] = " ".join(
         filter(None, [_tag(xml, "manufacturer"), _tag(xml, "modelName")])
     ) or None
-    found = _find_wan_service(xml, location)
+    found = _find_wan_service(xml, safe, device_ip)
     if not found:
         return info
     stype, ctrl = found
@@ -451,14 +511,14 @@ def find_gateway_location(ssdp: dict, gateway_ip: Optional[str]) -> Optional[str
     if not gateway_ip:
         return None
     entry = (ssdp or {}).get(gateway_ip) or {}
-    return entry.get("location")
+    return safe_device_url(entry.get("location"), gateway_ip)
 
 
 def _tag(xml: str, tag: str) -> Optional[str]:
     m = re.search(rf"<{tag}>(.*?)</{tag}>", xml, re.IGNORECASE | re.DOTALL)
     if not m:
         return None
-    val = re.sub(r"\s+", " ", m.group(1)).strip()
+    val = re.sub(r"\s+", " ", html.unescape(m.group(1))).strip()
     return val or None
 
 

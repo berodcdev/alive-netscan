@@ -49,11 +49,20 @@ def _run_bounded(
 # DNS reverso
 # --------------------------------------------------------------------------- #
 def _reverse_dns(ip: str) -> Optional[str]:
+    """Nome PTR do host, ou None.
+
+    Roteadores domésticos (ZTE, Huawei, parte dos TP-Link) respondem o próprio
+    IP como PTR. Isso não é nome: aceito, ele ocupa a coluna mais larga da
+    tabela repetindo o dado que já está na coluna ao lado — e ainda entra na
+    classificação como se fosse um sinal.
+    """
     try:
         name = socket.gethostbyaddr(ip)[0]
-        return name or None
     except (OSError, socket.herror):
         return None
+    if not name or name.strip().rstrip(".") == ip:
+        return None
+    return name
 
 
 def resolve_hostnames(ips: list[str], timeout_total: float = 5.0) -> dict[str, str]:

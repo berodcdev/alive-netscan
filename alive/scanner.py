@@ -160,22 +160,49 @@ def nmap_scan(cidr: str) -> tuple[set[str], dict[str, str]]:
 # --------------------------------------------------------------------------- #
 # Tabela ARP
 # --------------------------------------------------------------------------- #
-def read_arp_table() -> dict[str, str]:
-    """Lê a tabela ARP do SO. Retorna {ip: mac_normalizado}."""
-    table: dict[str, str] = {}
+# Estados de vizinho do `ip neigh`. Nem toda entrada da tabela ARP é um host
+# presente: STALE é cache que o kernel ainda não revalidou — o aparelho pode ter
+# saído da rede há horas. Tratar tudo como "vivo" faz a ferramenta afirmar uma
+# presença que não verificou. FAILED/INCOMPLETE nem têm MAC.
+_ARP_CONFIRMED = {"REACHABLE", "DELAY", "PROBE", "PERMANENT", "NOARP"}
+_ARP_DEAD = {"FAILED", "INCOMPLETE"}
+_ARP_STATES = _ARP_CONFIRMED | _ARP_DEAD | {"STALE"}
+
+
+def read_arp_entries() -> dict[str, dict]:
+    """Lê a tabela ARP do SO. Retorna {ip: {"mac": str, "state": str}}.
+
+    ``state`` é ``"confirmado"`` (o kernel falou com o vizinho nesta varredura)
+    ou ``"stale"`` (só cache). O ``arp -a`` do macOS não expõe o estado, então
+    lá tudo vira ``"confirmado"``.
+    """
+    table: dict[str, dict] = {}
 
     if shutil.which("ip") and not IS_MAC:
         out = _run(["ip", "neigh"])
         # ex.: "192.168.0.1 dev wlan0 lladdr aa:bb:cc:dd:ee:ff REACHABLE"
+        # Flags opcionais (router, proxy, extern_learn) podem vir antes do
+        # estado, então procuramos o estado entre os tokens finais.
         for line in out.splitlines():
             m = re.search(
-                r"^(\d+\.\d+\.\d+\.\d+)\s+dev\s+\S+\s+lladdr\s+([0-9a-fA-F:]{17})",
+                r"^(\d+\.\d+\.\d+\.\d+)\s+dev\s+\S+\s+lladdr\s+"
+                r"([0-9a-fA-F:]{17})\s*(.*)$",
                 line.strip(),
             )
-            if m:
-                mac = normalize_mac(m.group(2))
-                if mac:
-                    table[m.group(1)] = mac
+            if not m:
+                continue
+            mac = normalize_mac(m.group(2))
+            if not mac:
+                continue
+            state = next(
+                (t for t in m.group(3).upper().split() if t in _ARP_STATES), ""
+            )
+            if state in _ARP_DEAD:
+                continue
+            table[m.group(1)] = {
+                "mac": mac,
+                "state": "stale" if state == "STALE" else "confirmado",
+            }
         if table:
             return table
 
@@ -187,8 +214,13 @@ def read_arp_table() -> dict[str, str]:
         if m:
             mac = normalize_mac(m.group(2))
             if mac:
-                table[m.group(1)] = mac
+                table[m.group(1)] = {"mac": mac, "state": "confirmado"}
     return table
+
+
+def read_arp_table() -> dict[str, str]:
+    """Só {ip: mac_normalizado}, sem o estado do vizinho."""
+    return {ip: entry["mac"] for ip, entry in read_arp_entries().items()}
 
 
 # --------------------------------------------------------------------------- #
@@ -233,15 +265,17 @@ def scan(
     # A tabela ARP é fonte de hosts, não só de MACs: o ping sweep dispara um ARP
     # request para cada IP, então quem responde ARP mas ignora ICMP (Windows com
     # firewall, IoT, impressora) fica registrado aqui — e estaria invisível.
-    arp = read_arp_table()
-    for ip, mac in arp.items():
+    arp = read_arp_entries()
+    arp_states: dict[str, str] = {}
+    for ip, entry in arp.items():
         try:
             in_net = ipaddress.ip_address(ip) in network
         except ValueError:
             continue
         if not in_net:
             continue
-        macs.setdefault(ip, mac)
+        macs.setdefault(ip, entry["mac"])
+        arp_states[ip] = entry["state"]
         alive.setdefault(ip, "arp")
 
     hosts = [
@@ -251,6 +285,7 @@ def scan(
             "rtt": stats.get(ip, {}).get("rtt"),
             "ttl": stats.get(ip, {}).get("ttl"),
             "via": via,
+            "arp_state": arp_states.get(ip),
         }
         for ip, via in alive.items()
     ]

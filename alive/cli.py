@@ -111,6 +111,10 @@ def build_parser() -> argparse.ArgumentParser:
         "-i", "--interface", metavar="IF",
         help="interface de rede, ex.: en0, wlan0 [dim](padrão: a da rota padrão)[/dim].",
     )
+    alvo.add_argument(
+        "--force", action="store_true",
+        help="varrer mesmo uma rede maior que /20 [dim](pode levar horas)[/dim].",
+    )
 
     veloc = parser.add_argument_group("varredura")
     veloc.add_argument(
@@ -196,6 +200,36 @@ def _resolve_network(
     return netinfo.network
 
 
+# Acima disso a varredura deixa de ser viável: cada IP é um ping (um processo)
+# e depois 22 conexões TCP. Um /8 são 16 milhões de endereços — a lista de IPs
+# sozinha estoura a memória antes do primeiro pacote sair.
+MAX_ADDRESSES = 4096  # /20
+
+
+def _br_num(n: int) -> str:
+    """Número com separador de milhar em pt-BR (1234567 -> 1.234.567)."""
+    return f"{n:,}".replace(",", ".")
+
+
+def _check_size(network: ipaddress.IPv4Network, netinfo: net.NetInfo, force: bool) -> bool:
+    """Recusa redes grandes demais para varrer, sugerindo a subrede local."""
+    if force or network.num_addresses <= MAX_ADDRESSES:
+        return True
+    render.error(
+        f"{network} tem {_br_num(network.num_addresses)} endereços — acima do "
+        f"limite de {_br_num(MAX_ADDRESSES)} (/20). Varrer isso levaria horas."
+    )
+    if netinfo.ip:
+        suggestion = ipaddress.ip_network(f"{netinfo.ip}/24", strict=False)
+        render.console.print(
+            f"[dim]› varra a sua subrede: [bold]-n {suggestion}[/bold][/dim]"
+        )
+    render.console.print(
+        "[dim]› ou varra assim mesmo: [bold]--force[/bold][/dim]"
+    )
+    return False
+
+
 def _sort_hosts(hosts: list[dict], key: str) -> list[dict]:
     if key == "name":
         return sorted(hosts, key=lambda h: (h.get("name") or "~").lower())
@@ -241,6 +275,8 @@ def run(args: argparse.Namespace) -> int:
             "não foi possível determinar a subrede. "
             "Use -n para especificar (ex.: -n 192.168.0.0/24)."
         )
+        return 2
+    if not _check_size(network, netinfo, args.force):
         return 2
     netinfo.network = network
 
@@ -291,8 +327,8 @@ def _collect(
     *,
     use_nmap: bool,
     quiet: bool,
-) -> tuple[list[dict], history.Diff]:
-    """Executa scan + enriquecimento + sondas e devolve (hosts, diff)."""
+) -> tuple[list[dict], history.Diff, list[findings.Finding]]:
+    """Executa scan + enriquecimento + sondas e devolve (hosts, diff, achados)."""
     network = netinfo.network
     assert network is not None  # garantido por _resolve_network
 
@@ -409,6 +445,7 @@ def _collect(
                 "ttl": h.get("ttl"),
                 "os_family": os_family,
                 "via": h.get("via"),
+                "arp_state": h.get("arp_state"),
                 "history_off": bool(args.no_history),
             }
         )

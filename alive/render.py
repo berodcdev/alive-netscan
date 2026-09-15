@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Optional
 
 from rich.box import SQUARE
@@ -48,7 +49,8 @@ def print_summary(
     """Imprime o resumo da rede em formato de saída de ferramenta de recon."""
     console.print()
     _kv("[*]", "green", "alvo", f"[bold green]{net.cidr or '?'}[/bold green]")
-    _kv("[*]", "green", "interface", net.interface or "[dim]?[/dim]")
+    iface = escape(net.interface) if net.interface else "[dim]?[/dim]"
+    _kv("[*]", "green", "interface", iface)
 
     # Link: SSID + canal + sinal + taxa, o que estiver disponível.
     link = getattr(net, "link", None) or {}
@@ -113,8 +115,11 @@ def print_summary(
         since = f" [dim](desde o scan de {ago} atrás)[/dim]" if ago else ""
         _kv("[+]", "bright_green", "novos", f"[bold bright_green]{new_count}[/bold bright_green]{since}")
     if gone:
+        # Nome vindo da rede (mDNS/NetBIOS/UPnP): sem escape, um aparelho
+        # chamado "[/bold]" derruba o render inteiro com MarkupError — e leva
+        # junto a saída de toda a varredura.
         names = ", ".join(
-            f"{g.get('name') or g.get('ip')}" for g in gone[:4]
+            escape(str(g.get("name") or g.get("ip") or "?")) for g in gone[:4]
         ) + (" ..." if len(gone) > 4 else "")
         _kv("[-]", "yellow", "sairam", f"[yellow]{len(gone)}[/yellow] [dim]{names}[/dim]")
 
@@ -153,6 +158,8 @@ def clean_vendor(vendor: Optional[str]) -> Optional[str]:
 
 _NAME_SUFFIXES = (".local", ".lan", ".home", ".localdomain", ".home.arpa")
 
+_IP_LIKE = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
+
 
 def clean_hostname(name: Optional[str]) -> Optional[str]:
     """Normaliza nomes vindos de rDNS/mDNS/NetBIOS para exibição.
@@ -164,6 +171,10 @@ def clean_hostname(name: Optional[str]) -> Optional[str]:
     if not name:
         return None
     s = name.strip().rstrip(".")
+    # PTR que devolve o próprio IP (ver enrich._reverse_dns): repetir o IP na
+    # coluna HOST não informa nada e come a coluna mais larga da tabela.
+    if _IP_LIKE.match(s):
+        return None
     low = s.lower()
     for suf in _NAME_SUFFIXES:
         if low.endswith(suf):
@@ -206,7 +217,12 @@ def detail_text(host: dict) -> str:
     if not bits and host.get("os_family") in ("Windows", "rede/embarcado"):
         bits.append(f"[dim]{host['os_family']}[/dim]")
     if host.get("via") == "arp":
-        bits.append("[dim]só ARP[/dim]")
+        # "stale" = o kernel tem o MAC mas não confirmou o vizinho nesta
+        # varredura: pode ser um aparelho que já saiu e ainda não expirou.
+        if host.get("arp_state") == "stale":
+            bits.append("[yellow]ARP obsoleto[/yellow]")
+        else:
+            bits.append("[dim]só ARP[/dim]")
     for note in host.get("notes") or []:
         bits.append(f"[bright_red]{note}[/bright_red]")
 
@@ -366,6 +382,7 @@ def to_json(hosts: list[dict], net: NetInfo, findings: Optional[list] = None) ->
                 "rtt_ms": h.get("rtt"),
                 "ttl": h.get("ttl"),
                 "discovered_via": h.get("via"),
+                "arp_state": h.get("arp_state"),
                 "is_new": bool(h.get("is_new")),
                 "first_seen": h.get("first_seen"),
                 "seen_count": h.get("seen_count"),

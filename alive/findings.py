@@ -40,6 +40,12 @@ class Finding:
         return SEVERITY_COLOR.get(self.severity, "yellow")
 
 
+def _ip_list(hosts: list[dict], limit: int = 5) -> str:
+    """IPs separados por vírgula, truncados — cabe numa linha de achado."""
+    ips = ", ".join(h["ip"] for h in hosts[:limit])
+    return f"{ips} ..." if len(hosts) > limit else ips
+
+
 def _label(host: dict) -> str:
     name = host.get("name")
     return f"{host['ip']} ({name})" if name else host["ip"]
@@ -74,16 +80,26 @@ def collect(hosts: list[dict], wan: Optional[dict] = None) -> list[Finding]:
                 )
             )
 
-    # Hosts que só apareceram na tabela ARP: ignoram ping de propósito.
+    # Hosts que só apareceram na tabela ARP. O estado do vizinho separa dois
+    # casos bem diferentes: confirmado é um aparelho presente que ignora ping;
+    # obsoleto é cache que o kernel não revalidou — pode já ter saído da rede.
     silent = [h for h in hosts if h.get("via") == "arp"]
-    if silent:
-        ips = ", ".join(h["ip"] for h in silent[:5])
-        extra = " ..." if len(silent) > 5 else ""
+    confirmed = [h for h in silent if h.get("arp_state") != "stale"]
+    stale = [h for h in silent if h.get("arp_state") == "stale"]
+    if confirmed:
         out.append(
             Finding(
                 "baixo", None,
-                f"{len(silent)} host(s) responderam só a ARP, não a ping "
-                f"({ips}{extra}) — firewall ativo ou aparelho furtivo",
+                f"{len(confirmed)} host(s) responderam só a ARP, não a ping "
+                f"({_ip_list(confirmed)}) — firewall ativo ou aparelho furtivo",
+            )
+        )
+    if stale:
+        out.append(
+            Finding(
+                "baixo", None,
+                f"{len(stale)} host(s) vêm só de cache ARP obsoleto "
+                f"({_ip_list(stale)}) — podem já ter saído da rede",
             )
         )
 
