@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
+from .scanner import is_random_mac
+
 # Serviços em texto puro ou de controle remoto que não deveriam estar abertos
 # numa rede doméstica. {serviço: (severidade, o que é, o que fazer)}
 #
@@ -80,15 +82,29 @@ def _label(host: dict) -> str:
 
 
 def collect(
-    hosts: list[dict], wan: Optional[dict] = None, *, passive: bool = False
+    hosts: list[dict],
+    wan: Optional[dict] = None,
+    *,
+    passive: bool = False,
+    gateway: Optional[str] = None,
+    gateway_mac_prev: Optional[str] = None,
 ) -> list[Finding]:
     """Aplica todas as regras e devolve os achados ordenados por severidade.
 
     Com ``passive``, o achado de "só respondeu a ARP" é omitido: em modo
     passivo ninguém foi pingado, então todo host vem do ARP por construção —
     reportar isso como descoberta seria mentir sobre o que foi verificado.
+
+    ``gateway`` é o IP do roteador e ``gateway_mac_prev`` o MAC que ele tinha no
+    scan anterior (do histórico). Juntos alimentam a detecção de MITM: o MAC do
+    gateway mudar, ou o IP do gateway responder com um MAC forjado, é a
+    assinatura de ARP spoofing / evil twin numa rede interna.
     """
     out: list[Finding] = []
+
+    gw_mac = next(
+        (h.get("mac") for h in hosts if gateway and h.get("ip") == gateway), None
+    )
 
     for h in hosts:
         services = h.get("services") or set()
@@ -101,6 +117,38 @@ def collect(
                             fix.format(ip=h["ip"]))
                 )
 
+    # --- MITM: o gateway é o alvo nº 1 de ARP spoofing numa rede interna. ---
+
+    # O MAC do gateway mudou entre scans. Ou você trocou de roteador, ou alguém
+    # passou a responder pelo IP do gateway com o próprio MAC (poisoning/evil
+    # twin). Roteador não troca de MAC ao reiniciar, então isso é raro e caro.
+    if gateway and gw_mac and gateway_mac_prev and gw_mac != gateway_mac_prev:
+        out.append(
+            Finding(
+                "alto", gateway,
+                f"MAC do gateway {gateway} mudou de {gateway_mac_prev} para "
+                f"{gw_mac} desde o último scan — troca de roteador, ou ARP "
+                "spoofing / evil twin em andamento",
+                "se você não trocou de roteador, alguém pode estar interceptando "
+                "a rede; confira o MAC na etiqueta do aparelho e a tabela ARP",
+            )
+        )
+
+    # O IP do gateway responde com um MAC localmente administrado. Placa de
+    # roteador de verdade tem MAC de fábrica (OUI registrado); um MAC forjado
+    # aqui sugere que um aparelho está se passando pelo gateway. Roteador
+    # virtualizado (pfSense/OPNsense em VM) é o falso-positivo honesto, por isso
+    # médio e em forma de pergunta.
+    if gateway and gw_mac and is_random_mac(gw_mac):
+        out.append(
+            Finding(
+                "medio", gateway,
+                f"MAC do gateway {gateway} ({gw_mac}) é localmente administrado — "
+                "roteador virtualizado, ou um aparelho forjando o gateway",
+                "confirme que esse MAC bate com a etiqueta do seu roteador",
+            )
+        )
+
     # MAC repetido em IPs diferentes: bridge, NAT interno, VM — ou spoof.
     by_mac: dict[str, list[dict]] = {}
     for h in hosts:
@@ -108,8 +156,23 @@ def collect(
         if mac and not h.get("random_mac"):
             by_mac.setdefault(mac, []).append(h)
     for mac, group in by_mac.items():
-        if len(group) > 1:
-            ips = ", ".join(x["ip"] for x in group)
+        if len(group) <= 1:
+            continue
+        ips = ", ".join(x["ip"] for x in group)
+        # Se o MAC duplicado é o do gateway, isso é ARP spoofing clássico: um
+        # aparelho responde ARP com o MAC do roteador para se meter no caminho.
+        if gw_mac and mac == gw_mac:
+            others = ", ".join(x["ip"] for x in group if x["ip"] != gateway)
+            out.append(
+                Finding(
+                    "alto", gateway,
+                    f"o MAC do gateway ({mac}) responde também em {others} — "
+                    "ARP spoofing clássico: um aparelho se passa pelo roteador",
+                    "isole o aparelho intruso; ele pode estar interceptando o "
+                    "tráfego de quem está na rede",
+                )
+            )
+        else:
             out.append(
                 Finding(
                     "medio", group[0]["ip"],

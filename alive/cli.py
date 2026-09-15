@@ -517,11 +517,22 @@ def _collect(
         diff = history.compare(hosts, netinfo.cidr)
         for h in hosts:
             h["is_new"] = history.host_key(h) in diff.new_keys
-        history.save(hosts, netinfo.cidr)
+        history.save(hosts, netinfo.cidr, gateway=netinfo.gateway)
 
-    # 6) Achados: o que merece atenção no que foi encontrado.
+    # 6) Achados: o que merece atenção no que foi encontrado. O MAC do gateway
+    # do scan anterior (diff) alimenta a detecção de MITM. Só vale se o IP do
+    # gateway não mudou desde então.
+    gw_mac_prev = (
+        diff.gateway_mac_before
+        if diff.gateway_ip_before == netinfo.gateway
+        else None
+    )
     found = findings.collect(
-        hosts, netinfo.wan, passive=bool(getattr(args, "passive", False))
+        hosts,
+        netinfo.wan,
+        passive=bool(getattr(args, "passive", False)),
+        gateway=netinfo.gateway,
+        gateway_mac_prev=gw_mac_prev,
     )
     for h in hosts:
         h["notes"] = findings.short_notes(h)

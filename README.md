@@ -25,7 +25,10 @@ por portas TCP — mais a base de fabricantes OUI (offline).
 Com `--watch`, fica monitorando e avisa **quem entra e quem sai** da rede. E ao final de cada
 varredura lista os **achados**: serviço em texto puro exposto, câmera com RTSP aberto, ADB
 acessível, MAC duplicado e — via UPnP — os **redirecionamentos de porta ativos no seu
-roteador**, ou seja, o que está aberto para a internet.
+roteador**, ou seja, o que está aberto para a internet. Vigia também o **gateway**, alvo nº 1
+de ARP spoofing numa rede interna: avisa quando o MAC do roteador **muda** entre scans, quando
+o IP dele responde com um **MAC forjado**, ou quando **outro aparelho responde com o MAC do
+gateway** — a assinatura de um ataque man-in-the-middle em andamento.
 
 ---
 
@@ -101,7 +104,7 @@ já troca sozinha). Cobre menos, mas não deixa rastro em IDS nem acorda aparelh
 | **Fingerprint** | fabricante por OUI (offline) + ~22 portas TCP que identificam o aparelho |
 | **Classificação** | combina modelo, fabricante, serviços, portas, UPnP e hostname — marca `?` quando é palpite |
 | **Histórico** | compara com o scan anterior: marca quem é `NOVO`, quem saiu e há quanto tempo cada um é conhecido |
-| **Achados** | serviços expostos, MAC duplicado e os redirecionamentos de porta ativos no roteador — cada um com o que fazer a respeito |
+| **Achados** | serviços expostos, MAC duplicado, sinais de ARP spoofing no gateway (MITM) e os redirecionamentos de porta ativos no roteador — cada um com o que fazer a respeito |
 
 Sem `nmap` ou sem `sudo`, o `alive` ainda funciona — apenas pode não ver aparelhos que
 ignoram ping. Instalar `nmap` e/ou rodar com `sudo` melhora a cobertura de MACs.

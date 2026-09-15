@@ -105,3 +105,40 @@ class TestCompareESave:
         history.save([host("192.168.0.9", "f0:18:98:2a:1b:01")], "192.168.0.0/24")
         assert history.state_path().exists()
         assert not history.state_path().with_suffix(".tmp").exists()
+
+
+class TestGatewayMac:
+    """O MAC do gateway atravessa os scans para alimentar a detecção de MITM."""
+
+    CIDR = "192.168.0.0/24"
+
+    def test_save_guarda_mac_do_gateway(self, estado):
+        hosts = [
+            host("192.168.0.1", "a0:b1:c2:d3:e4:f5"),
+            host("192.168.0.9", "f0:18:98:2a:1b:01"),
+        ]
+        history.save(hosts, self.CIDR, gateway="192.168.0.1")
+        d = history.compare(hosts, self.CIDR)
+        assert d.gateway_ip_before == "192.168.0.1"
+        assert d.gateway_mac_before == "a0:b1:c2:d3:e4:f5"
+
+    def test_compare_devolve_mac_anterior_apos_troca(self, estado):
+        antes = [host("192.168.0.1", "a0:b1:c2:d3:e4:f5")]
+        history.save(antes, self.CIDR, gateway="192.168.0.1")
+        depois = [host("192.168.0.1", "de:ad:be:ef:00:99")]
+        d = history.compare(depois, self.CIDR)
+        assert d.gateway_mac_before == "a0:b1:c2:d3:e4:f5"
+
+    def test_sem_gateway_o_mac_fica_nulo(self, estado):
+        hosts = [host("192.168.0.9", "f0:18:98:2a:1b:01")]
+        history.save(hosts, self.CIDR)
+        d = history.compare(hosts, self.CIDR)
+        assert d.gateway_mac_before is None
+
+    def test_gateway_ausente_da_varredura(self, estado):
+        """Gateway não respondeu: grava o IP, mas sem MAC."""
+        hosts = [host("192.168.0.9", "f0:18:98:2a:1b:01")]
+        history.save(hosts, self.CIDR, gateway="192.168.0.1")
+        d = history.compare(hosts, self.CIDR)
+        assert d.gateway_ip_before == "192.168.0.1"
+        assert d.gateway_mac_before is None

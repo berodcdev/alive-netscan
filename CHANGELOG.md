@@ -3,6 +3,22 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/);
 versionamento [SemVer](https://semver.org/lang/pt-BR/).
 
+## [0.5.0] — 2026-09-15
+
+### Adicionado
+- Detecção de MITM ancorada no gateway, o alvo nº 1 de ARP spoofing numa rede
+  interna:
+  - **MAC do gateway mudou** entre dois scans (via histórico): achado `alto`.
+    Roteador não troca de MAC ao reiniciar, então isso é troca física de
+    aparelho — ou alguém passou a responder pelo IP do gateway (poisoning /
+    evil twin). O MAC do gateway agora persiste no histórico por subrede.
+  - **MAC do gateway é localmente administrado**: achado `medio`. Placa de
+    roteador de verdade tem MAC de fábrica; um MAC forjado no IP do gateway
+    sugere impersonação. Roteador em VM (pfSense/OPNsense) é o falso-positivo
+    honesto, por isso `medio` e em forma de pergunta.
+  - **MAC do gateway respondendo em outro IP**: ARP spoofing clássico, agora
+    `alto` em vez do genérico `medio` de MAC duplicado.
+
 ## [0.4.0] — 2026-09-15
 
 Auditoria completa da ferramenta: 9 bugs de corretude, 1 de segurança e a

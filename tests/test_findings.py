@@ -153,3 +153,72 @@ class TestModoPassivo:
     def test_sem_passive_reporta_normalmente(self):
         hosts = [host("192.168.0.9", via="arp", arp_state="confirmado")]
         assert len(findings.collect(hosts)) == 1
+
+
+class TestMitm:
+    """Detecção de MITM ancorada no gateway: ARP spoofing / evil twin."""
+
+    GW = "192.168.0.1"
+    MAC_A = "a0:b1:c2:d3:e4:f5"  # MAC de fábrica (OUI registrado)
+    MAC_B = "a0:b1:c2:00:00:99"  # outro MAC de fábrica
+
+    def _mitm(self, achados):
+        return [f for f in achados if f.ip == self.GW]
+
+    def test_mac_do_gateway_mudou(self):
+        hosts = [host(self.GW, mac=self.MAC_B)]
+        achados = findings.collect(
+            hosts, gateway=self.GW, gateway_mac_prev=self.MAC_A
+        )
+        (a,) = self._mitm(achados)
+        assert a.severity == "alto"
+        assert self.MAC_A in a.message and self.MAC_B in a.message
+        assert a.fix
+
+    def test_mac_igual_ao_anterior_nao_alarma(self):
+        hosts = [host(self.GW, mac=self.MAC_A)]
+        achados = findings.collect(
+            hosts, gateway=self.GW, gateway_mac_prev=self.MAC_A
+        )
+        assert self._mitm(achados) == []
+
+    def test_sem_historico_nao_alarma_por_mudanca(self):
+        hosts = [host(self.GW, mac=self.MAC_A)]
+        achados = findings.collect(hosts, gateway=self.GW, gateway_mac_prev=None)
+        assert self._mitm(achados) == []
+
+    def test_gateway_com_mac_localmente_administrado(self):
+        hosts = [host(self.GW, mac="6e:00:11:22:33:44", random_mac=True)]
+        achados = findings.collect(hosts, gateway=self.GW)
+        (a,) = self._mitm(achados)
+        assert a.severity == "medio"
+        assert "localmente administrado" in a.message
+
+    def test_gateway_com_mac_de_fabrica_nao_alarma(self):
+        hosts = [host(self.GW, mac=self.MAC_A)]
+        achados = findings.collect(hosts, gateway=self.GW)
+        assert self._mitm(achados) == []
+
+    def test_mac_do_gateway_duplicado_e_spoof_alto(self):
+        """MAC do gateway respondendo em outro IP: ARP spoofing clássico."""
+        hosts = [
+            host(self.GW, mac=self.MAC_A),
+            host("192.168.0.77", mac=self.MAC_A),
+        ]
+        achados = findings.collect(hosts, gateway=self.GW)
+        alto = [f for f in achados if f.severity == "alto"]
+        assert len(alto) == 1
+        assert "192.168.0.77" in alto[0].message
+        assert "ARP spoofing" in alto[0].message
+
+    def test_mac_duplicado_sem_ser_gateway_continua_medio(self):
+        hosts = [
+            host("192.168.0.9", mac=self.MAC_A),
+            host("192.168.0.10", mac=self.MAC_A),
+        ]
+        achados = findings.collect(hosts, gateway=self.GW)
+        assert [f.severity for f in achados] == ["medio"]
+
+    def test_sem_gateway_nenhuma_regra_mitm_dispara(self):
+        hosts = [host(self.GW, mac="6e:00:11:22:33:44", random_mac=True)]
+        assert findings.collect(hosts) == []

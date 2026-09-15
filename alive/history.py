@@ -43,6 +43,11 @@ class Diff:
     gone: list[dict] = field(default_factory=list)
     previous_time: Optional[float] = None
     first_run: bool = True
+    # MAC que o gateway tinha no scan anterior desta mesma subrede. Serve para
+    # detectar troca de roteador — ou ARP spoofing / evil twin, quando o IP do
+    # gateway passa a responder com um MAC diferente.
+    gateway_ip_before: Optional[str] = None
+    gateway_mac_before: Optional[str] = None
 
     @property
     def ago(self) -> Optional[str]:
@@ -108,6 +113,8 @@ def compare(hosts: list[dict], cidr: Optional[str]) -> Diff:
         gone=gone,
         previous_time=entry.get("time"),
         first_run=False,
+        gateway_ip_before=entry.get("gateway_ip"),
+        gateway_mac_before=entry.get("gateway_mac"),
     )
 
 
@@ -130,7 +137,17 @@ def seen_label(host: dict, first_run: bool = False) -> str:
     return f"há {secs // (86400 * 30)}mes"
 
 
-def save(hosts: list[dict], cidr: Optional[str]) -> None:
+def _gateway_mac(hosts: list[dict], gateway: Optional[str]) -> Optional[str]:
+    """MAC atual do IP do gateway, se ele apareceu na varredura."""
+    if not gateway:
+        return None
+    for h in hosts:
+        if h.get("ip") == gateway:
+            return h.get("mac")
+    return None
+
+
+def save(hosts: list[dict], cidr: Optional[str], gateway: Optional[str] = None) -> None:
     """Grava o snapshot atual. Silencioso em qualquer falha de I/O."""
     if not cidr:
         return
@@ -140,6 +157,8 @@ def save(hosts: list[dict], cidr: Optional[str]) -> None:
     data.setdefault("networks", {})[cidr] = {
         "time": now,
         "total_scans": int(previous.get("total_scans") or 0) + 1,
+        "gateway_ip": gateway,
+        "gateway_mac": _gateway_mac(hosts, gateway),
         "hosts": [
             {
                 "key": host_key(h),
