@@ -26,7 +26,8 @@ e o certificado TLS do aparelho — mais a base de fabricantes OUI (offline).
 Com `--watch`, fica monitorando e avisa **quem entra e quem sai** da rede. E ao final de cada
 varredura lista os **achados**: serviço em texto puro exposto, câmera com RTSP aberto, ADB
 acessível, MAC duplicado e — via UPnP — os **redirecionamentos de porta ativos no seu
-roteador**, ou seja, o que está aberto para a internet. Vigia também o **gateway**, alvo nº 1
+roteador**, ou seja, o que está aberto para a internet. Detecta ainda **servidor DHCP rogue** (sob `sudo`), o vetor de MITM mais silencioso: um DHCP
+não autorizado que entrega a si mesmo como gateway. Vigia também o **gateway**, alvo nº 1
 de ARP spoofing numa rede interna: avisa quando o MAC do roteador **muda** entre scans, quando
 o IP dele responde com um **MAC forjado**, ou quando **outro aparelho responde com o MAC do
 gateway** — a assinatura de um ataque man-in-the-middle em andamento.
@@ -105,7 +106,7 @@ já troca sozinha). Cobre menos, mas não deixa rastro em IDS nem acorda aparelh
 | **Fingerprint** | fabricante por OUI (offline) + ~22 portas TCP + SNMP `public` + certificado TLS (CN/SAN) que identificam o aparelho |
 | **Classificação** | combina modelo, fabricante, serviços, portas, UPnP e hostname — marca `?` quando é palpite |
 | **Histórico** | compara com o scan anterior: marca quem é `NOVO`, quem saiu e há quanto tempo cada um é conhecido |
-| **Achados** | serviços expostos, MAC duplicado, sinais de ARP spoofing no gateway (MITM), SNMP `public` aberto, certificado TLS vencido e os redirecionamentos de porta ativos no roteador — cada um com o que fazer a respeito |
+| **Achados** | serviços expostos, MAC duplicado, sinais de ARP spoofing no gateway (MITM), servidor DHCP rogue, SNMP `public` aberto, certificado TLS vencido e os redirecionamentos de porta ativos no roteador — cada um com o que fazer a respeito |
 
 Sem `nmap` ou sem `sudo`, o `alive` ainda funciona — apenas pode não ver aparelhos que
 ignoram ping. Instalar `nmap` e/ou rodar com `sudo` melhora a cobertura de MACs.
@@ -195,10 +196,11 @@ antes de ir para a tela.
 
 As sondas ativas se limitam a: um ping por host, uma conexão TCP em ~22 portas que
 *identificam* o aparelho, a leitura do banner de quem já estava com a porta aberta,
-um GetRequest SNMP só-leitura com a community padrão `public` e a leitura do
-certificado que o host apresenta no handshake TLS. Não há teste de credencial,
-força bruta de community nem exploração — só o `public` universalmente conhecido, e
-só leitura. O TLS não é verificado ao ler banner HTTPS, porque aparelhos de LAN usam
+um GetRequest SNMP só-leitura com a community padrão `public`, a leitura do
+certificado que o host apresenta no handshake TLS e um DHCP DISCOVER em broadcast
+para detectar servidor DHCP rogue. Não há teste de credencial, força bruta de
+community nem exploração — só o `public` universalmente conhecido, e só leitura. O
+DISCOVER nunca é seguido de REQUEST, então nenhum lease é fechado. O TLS não é verificado ao ler banner HTTPS, porque aparelhos de LAN usam
 certificado autoassinado — nenhum dado é enviado, só lido.
 
 ## Licença

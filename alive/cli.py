@@ -157,6 +157,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="pular a consulta SNMP com community public [dim](impressora, switch, AP)[/dim].",
     )
     veloc.add_argument(
+        "--no-dhcp", action="store_true",
+        help="pular a detecção de servidor DHCP rogue [dim](requer sudo/root)[/dim].",
+    )
+    veloc.add_argument(
         "--upnp-time", type=float, default=2.5, metavar="SEG",
         help="tempo ouvindo respostas SSDP/UPnP [dim](padrão: 2.5s)[/dim].",
     )
@@ -273,6 +277,7 @@ def _apply_passive(args: argparse.Namespace) -> None:
     args.no_netbios = True
     args.no_upnp = True
     args.no_snmp = True
+    args.no_dhcp = True
 
 
 def _exit_code(found: list, fail_on: Optional[str]) -> int:
@@ -296,6 +301,7 @@ def _apply_fast(args: argparse.Namespace) -> None:
     args.no_upnp = True
     args.no_netbios = True
     args.no_snmp = True
+    args.no_dhcp = True
 
 
 def run(args: argparse.Namespace) -> int:
@@ -444,6 +450,21 @@ def _collect(
     snmp = {} if getattr(args, "no_snmp", False) else _staged(
         args, quiet, "consultando SNMP (public)", lambda: probe.query_snmp(ips)
     )
+    # DHCP rogue: precisa da porta 68 (privilegiada). Só tentamos sob root, senão
+    # a sonda mostraria um spinner só para falhar ao fazer bind.
+    dhcp: Optional[list[dict]] = None
+    _is_root = hasattr(__import__("os"), "geteuid") and __import__("os").geteuid() == 0
+    if not getattr(args, "no_dhcp", False) and _is_root:
+        local_mac_for_dhcp = scanner.normalize_mac(
+            net.get_interface_mac(netinfo.interface)
+        )
+        dhcp = _staged(
+            args, quiet, "procurando DHCP rogue",
+            lambda: probe.discover_dhcp(local_mac_for_dhcp),
+        )
+        # _staged devolve {} se a sonda lançar: normaliza para None (não rodou).
+        if not isinstance(dhcp, list):
+            dhcp = None
     # Banners só fazem sentido depois de saber quais portas estão abertas. O
     # certificado TLS vem junto, do mesmo handshake dos hosts com HTTPS.
     banners = {} if args.no_ports else _staged(
@@ -548,12 +569,14 @@ def _collect(
         if diff.gateway_ip_before == netinfo.gateway
         else None
     )
+    netinfo.dhcp = dhcp
     found = findings.collect(
         hosts,
         netinfo.wan,
         passive=bool(getattr(args, "passive", False)),
         gateway=netinfo.gateway,
         gateway_mac_prev=gw_mac_prev,
+        dhcp=dhcp,
     )
     for h in hosts:
         h["notes"] = findings.short_notes(h)

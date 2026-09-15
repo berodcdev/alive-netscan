@@ -3,6 +3,19 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/);
 versionamento [SemVer](https://semver.org/lang/pt-BR/).
 
+## [0.8.0] — 2026-09-15
+
+### Adicionado
+- **Detecção de servidor DHCP rogue**, o vetor de MITM mais silencioso de uma
+  rede interna: um DHCP não autorizado entrega a si mesmo como gateway/DNS e
+  passa a ver todo o tráfego. O `alive` manda um DHCP DISCOVER em broadcast e
+  coleta as OFFERs — se responder mais de um servidor, ou um que ofereça um
+  gateway diferente do atual, vira achado `alto`. Nunca manda REQUEST: nenhum
+  lease é fechado, nada na rede é perturbado. Os servidores vistos saem em
+  `dhcp_servers` no `--json`. Requer a porta 68 (privilegiada): roda sob
+  sudo/root e é pulado silenciosamente sem privilégio. Desligável com
+  `--no-dhcp`; fora de `--passive` e `--fast`.
+
 ## [0.7.0] — 2026-09-15
 
 ### Adicionado

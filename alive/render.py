@@ -526,6 +526,7 @@ def to_json(
             "link": getattr(net, "link", {}) or {},
             "dns": getattr(net, "dns", []) or [],
             "wan": getattr(net, "wan", {}) or {},
+            "dhcp_servers": getattr(net, "dhcp", None) or [],
         },
         "hosts": [
             {

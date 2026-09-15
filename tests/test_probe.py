@@ -338,3 +338,67 @@ class TestSnmp:
     def test_colapsa_espacos_e_controle(self):
         out = probe.parse_snmp_response(self._resposta("HP\x00\r\n  LaserJet", None))
         assert out[probe._OID_SYS_DESCR] == "HP LaserJet"
+
+
+class TestDhcp:
+    def _offer(self, xid, server, router, yiaddr="192.168.0.100",
+               dns="192.168.0.1", msg_type=2, op=2):
+        import socket
+        import struct
+        pkt = struct.pack(
+            ">BBBBIHHIIII16s64s128s",
+            op, 1, 6, 0, xid, 0, 0x8000, 0,
+            int.from_bytes(socket.inet_aton(yiaddr), "big"), 0, 0,
+            b"", b"", b"",
+        )
+        opts = probe._DHCP_MAGIC + bytes([53, 1, msg_type])
+        if server:
+            opts += bytes([54, 4]) + socket.inet_aton(server)
+        if router:
+            opts += bytes([3, 4]) + socket.inet_aton(router)
+        if dns:
+            opts += bytes([6, 4]) + socket.inet_aton(dns)
+        return pkt + opts + bytes([255])
+
+    def test_discover_bem_formado(self):
+        import struct
+        d = probe.build_dhcp_discover("aa:bb:cc:dd:ee:ff", 0x12345678)
+        assert d[0] == 1  # BOOTREQUEST
+        assert probe._DHCP_MAGIC in d
+        assert struct.unpack(">I", d[4:8])[0] == 0x12345678
+        assert d[10:12] == b"\x80\x00"  # flag de broadcast
+        assert bytes([53, 1, 1]) in d   # message type = DISCOVER
+
+    def test_discover_sem_mac(self):
+        assert probe.build_dhcp_discover(None, 1)[28:34] == b"\x00" * 6
+
+    def test_parse_offer(self):
+        o = probe.parse_dhcp_offer(self._offer(1, "192.168.0.1", "192.168.0.1"))
+        assert o["server"] == "192.168.0.1"
+        assert o["routers"] == ["192.168.0.1"]
+        assert o["offered_ip"] == "192.168.0.100"
+        assert o["dns"] == ["192.168.0.1"]
+
+    def test_parse_ack_tambem_conta(self):
+        assert probe.parse_dhcp_offer(
+            self._offer(1, "192.168.0.1", "192.168.0.1", msg_type=5)
+        ) is not None
+
+    def test_ignora_pacote_que_nao_e_reply(self):
+        assert probe.parse_dhcp_offer(
+            self._offer(1, "192.168.0.1", "192.168.0.1", op=1)
+        ) is None
+
+    def test_ignora_tipo_que_nao_e_offer(self):
+        # message type 1 = DISCOVER, não OFFER
+        assert probe.parse_dhcp_offer(
+            self._offer(1, "192.168.0.1", "192.168.0.1", msg_type=1)
+        ) is None
+
+    def test_pacote_curto(self):
+        assert probe.parse_dhcp_offer(b"\x02" * 10) is None
+
+    def test_mac_to_bytes(self):
+        assert probe._mac_to_bytes("aa:bb:cc:dd:ee:ff") == b"\xaa\xbb\xcc\xdd\xee\xff"
+        assert probe._mac_to_bytes(None) == b"\x00" * 6
+        assert probe._mac_to_bytes("lixo") == b"\x00" * 6

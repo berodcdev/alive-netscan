@@ -944,3 +944,144 @@ def query_netbios(
     with ThreadPoolExecutor(max_workers=max(1, min(workers, len(ips)))) as pool:
         list(pool.map(work, ips))
     return names
+
+
+# --------------------------------------------------------------------------- #
+# DHCP rogue (67/68 UDP)
+#
+# Um servidor DHCP não autorizado é o vetor de MITM mais silencioso de uma rede
+# interna: ele entrega a si mesmo como gateway/DNS e passa a ver todo o tráfego.
+# Mandamos um DISCOVER em broadcast e coletamos as OFFERs — se responder mais de
+# um servidor, ou um que ofereça um gateway diferente do atual, é rogue.
+#
+# Só um DISCOVER: nunca mandamos REQUEST, então nenhum lease é fechado e nada na
+# rede é perturbado. Requer a porta 68 (privilegiada) — roda sob sudo/root.
+# --------------------------------------------------------------------------- #
+_DHCP_MAGIC = b"\x63\x82\x53\x63"
+
+
+def _mac_to_bytes(mac: Optional[str]) -> bytes:
+    """'aa:bb:cc:dd:ee:ff' -> 6 bytes. Zeros se ausente/inválido."""
+    if not mac:
+        return b"\x00" * 6
+    try:
+        return bytes(int(x, 16) for x in mac.split(":"))[:6].ljust(6, b"\x00")
+    except ValueError:
+        return b"\x00" * 6
+
+
+def build_dhcp_discover(mac: Optional[str], xid: int) -> bytes:
+    """Monta um pacote BOOTP/DHCP DISCOVER com flag de broadcast."""
+    chaddr = _mac_to_bytes(mac).ljust(16, b"\x00")
+    packet = struct.pack(
+        ">BBBBIHHIIII16s64s128s",
+        1, 1, 6, 0,        # op=BOOTREQUEST, htype=ethernet, hlen=6, hops=0
+        xid,               # transaction id
+        0, 0x8000,         # secs, flags=broadcast
+        0, 0, 0, 0,        # ciaddr, yiaddr, siaddr, giaddr
+        chaddr, b"", b"",  # chaddr (16), sname (64), file (128)
+    )
+    options = (
+        _DHCP_MAGIC
+        + bytes([53, 1, 1])                    # DHCP message type = DISCOVER
+        + bytes([55, 5, 1, 3, 6, 15, 54])      # param request: subnet,router,dns,domain,serverid
+        + bytes([255])                          # end
+    )
+    return packet + options
+
+
+def _dhcp_options(data: bytes) -> dict[int, bytes]:
+    """Decodifica as opções DHCP (TLV simples) após o magic cookie."""
+    idx = data.find(_DHCP_MAGIC)
+    if idx < 0:
+        return {}
+    i = idx + 4
+    opts: dict[int, bytes] = {}
+    while i < len(data):
+        code = data[i]
+        if code == 255:  # end
+            break
+        if code == 0:    # pad
+            i += 1
+            continue
+        if i + 1 >= len(data):
+            break
+        length = data[i + 1]
+        opts[code] = data[i + 2 : i + 2 + length]
+        i += 2 + length
+    return opts
+
+
+def _ips_from(raw: bytes) -> list[str]:
+    return [socket.inet_ntoa(raw[j : j + 4]) for j in range(0, len(raw) - 3, 4)]
+
+
+def parse_dhcp_offer(data: bytes) -> Optional[dict]:
+    """Extrai o servidor, o gateway e o DNS oferecidos de uma OFFER DHCP."""
+    if len(data) < 240 or data[0] != 2:  # op=BOOTREPLY
+        return None
+    opts = _dhcp_options(data)
+    if opts.get(53) not in (b"\x02", b"\x05"):  # OFFER ou ACK
+        return None
+    server = opts.get(54)
+    info: dict = {
+        "server": socket.inet_ntoa(server) if server and len(server) == 4 else None,
+        "offered_ip": socket.inet_ntoa(data[16:20]) if data[16:20] != b"\x00" * 4 else None,
+        "routers": _ips_from(opts.get(3, b"")),
+        "dns": _ips_from(opts.get(6, b"")),
+    }
+    return info
+
+
+def discover_dhcp(mac: Optional[str], duration: float = 3.0) -> Optional[list[dict]]:
+    """Manda um DISCOVER e coleta as OFFERs. Retorna a lista de servidores.
+
+    ``None`` quando não dá para escutar a porta 68 (sem privilégio): a sonda
+    fica indisponível, não é o mesmo que "nenhum servidor rogue".
+    """
+    import os
+
+    xid = int.from_bytes(os.urandom(4), "big")
+    sock = None
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        if hasattr(socket, "SO_REUSEPORT"):
+            try:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+            except OSError:
+                pass
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        try:
+            sock.bind(("", 68))
+        except OSError:
+            return None  # porta 68 exige privilégio (ou já está em uso)
+        sock.settimeout(0.5)
+        sock.sendto(build_dhcp_discover(mac, xid), ("255.255.255.255", 67))
+
+        servers: dict[str, dict] = {}
+        deadline = time.monotonic() + duration
+        while time.monotonic() < deadline:
+            try:
+                data, addr = sock.recvfrom(2048)
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+            if len(data) >= 4 and struct.unpack(">I", data[4:8])[0] != xid:
+                continue  # resposta a outro cliente
+            offer = parse_dhcp_offer(data)
+            if not offer:
+                continue
+            key = offer.get("server") or addr[0]
+            offer.setdefault("source", addr[0])
+            servers.setdefault(key, offer)
+    except OSError:
+        return None
+    finally:
+        if sock is not None:
+            try:
+                sock.close()
+            except OSError:
+                pass
+    return list(servers.values())

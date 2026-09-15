@@ -89,6 +89,7 @@ def collect(
     passive: bool = False,
     gateway: Optional[str] = None,
     gateway_mac_prev: Optional[str] = None,
+    dhcp: Optional[list[dict]] = None,
 ) -> list[Finding]:
     """Aplica todas as regras e devolve os achados ordenados por severidade.
 
@@ -205,6 +206,39 @@ def collect(
                 f"({_ip_list(stale)}) — podem já ter saído da rede",
             )
         )
+
+    # Servidor DHCP rogue: entrega a si mesmo como gateway/DNS e passa a ver todo
+    # o tráfego. dhcp=None significa que a sonda não rodou (sem privilégio), o que
+    # é diferente de "não há rogue".
+    if dhcp is not None:
+        # Um servidor que oferece um gateway diferente do atual é o sinal forte:
+        # é isso que sequestra a rota de saída.
+        impostores = [
+            s for s in dhcp
+            if s.get("routers") and gateway and gateway not in s["routers"]
+        ]
+        for s in impostores:
+            quem = s.get("server") or s.get("source") or "?"
+            rota = ", ".join(s.get("routers") or [])
+            out.append(
+                Finding(
+                    "alto", s.get("server"),
+                    f"servidor DHCP em {quem} oferece gateway {rota}, diferente do "
+                    f"atual ({gateway}) — DHCP rogue sequestrando a rede",
+                    "desligue esse servidor DHCP; ele pode estar interceptando "
+                    "todo o tráfego de quem pega IP com ele",
+                )
+            )
+        if not impostores and len(dhcp) > 1:
+            ips = ", ".join(s.get("server") or s.get("source") or "?" for s in dhcp)
+            out.append(
+                Finding(
+                    "alto", None,
+                    f"{len(dhcp)} servidores DHCP respondendo na rede ({ips}) — "
+                    "só deve haver um; um deles não é autorizado",
+                    "confirme qual servidor DHCP é o seu e desligue o outro",
+                )
+            )
 
     # Redirecionamentos de porta ativos no roteador: exposição para a internet.
     for m in (wan or {}).get("port_mappings") or []:

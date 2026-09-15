@@ -33,6 +33,8 @@ class NetInfo:
     link: dict = field(default_factory=dict)
     dns: list = field(default_factory=list)
     wan: dict = field(default_factory=dict)
+    # Servidores DHCP que responderam ao DISCOVER (None = sonda não rodou).
+    dhcp: Optional[list] = None
 
     @property
     def cidr(self) -> Optional[str]:

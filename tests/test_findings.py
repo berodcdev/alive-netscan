@@ -263,3 +263,38 @@ class TestCertVencido:
         import time
         h = host("192.168.0.50", tls={"not_after": time.time() - 1})
         assert "cert vencido!" in findings.short_notes(h)
+
+
+class TestDhcpRogue:
+    GW = "192.168.0.1"
+
+    def _srv(self, server, router, source=None):
+        return {"server": server, "routers": [router], "dns": [],
+                "source": source or server, "offered_ip": "192.168.0.100"}
+
+    def test_gateway_diferente_e_rogue_alto(self):
+        rogue = self._srv("192.168.0.66", "192.168.0.66")
+        (a,) = [f for f in findings.collect([], gateway=self.GW, dhcp=[rogue])
+                if "rogue" in f.message]
+        assert a.severity == "alto"
+        assert "192.168.0.66" in a.message and self.GW in a.message
+
+    def test_dois_servidores_com_gateway_certo(self):
+        a = self._srv(self.GW, self.GW)
+        b = self._srv("192.168.0.2", self.GW)
+        (f,) = [x for x in findings.collect([], gateway=self.GW, dhcp=[a, b])
+                if "servidores DHCP" in x.message]
+        assert f.severity == "alto"
+
+    def test_um_servidor_legitimo_nao_alarma(self):
+        a = self._srv(self.GW, self.GW)
+        assert [f for f in findings.collect([], gateway=self.GW, dhcp=[a])
+                if "DHCP" in f.message] == []
+
+    def test_dhcp_none_nao_alarma(self):
+        assert [f for f in findings.collect([], gateway=self.GW, dhcp=None)
+                if "DHCP" in f.message] == []
+
+    def test_dhcp_vazio_nao_alarma(self):
+        assert [f for f in findings.collect([], gateway=self.GW, dhcp=[])
+                if "DHCP" in f.message] == []

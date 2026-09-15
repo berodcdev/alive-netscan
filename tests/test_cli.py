@@ -215,3 +215,21 @@ class TestFlagsSnmp:
         args = cli.build_parser().parse_args(["--fast"])
         cli._apply_fast(args)
         assert args.no_snmp is True
+
+
+class TestFlagsDhcp:
+    def test_flag_no_dhcp_existe(self):
+        from alive import cli
+        assert cli.build_parser().parse_args(["--no-dhcp"]).no_dhcp is True
+
+    def test_passivo_desliga_dhcp(self):
+        from alive import cli
+        args = cli.build_parser().parse_args(["--passive"])
+        cli._apply_passive(args)
+        assert args.no_dhcp is True
+
+    def test_fast_desliga_dhcp(self):
+        from alive import cli
+        args = cli.build_parser().parse_args(["--fast"])
+        cli._apply_fast(args)
+        assert args.no_dhcp is True
