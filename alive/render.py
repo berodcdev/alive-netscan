@@ -542,6 +542,7 @@ def to_json(
                 "snmp": h.get("snmp") or {},
                 "tls": h.get("tls") or {},
                 "services": sorted(h.get("services") or []),
+                "mdns_services": h.get("mdns_services") or [],
                 "rtt_ms": h.get("rtt"),
                 "ttl": h.get("ttl"),
                 "discovered_via": h.get("via"),

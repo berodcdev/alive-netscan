@@ -264,3 +264,29 @@ class TestSnmpETls:
     def test_sem_snmp_nem_tls_continua_funcionando(self):
         dev, _ = classificar(vendor="Apple")
         assert dev is tipos.COMPUTER
+
+
+class TestMdnsProfundo:
+    """Tipos de serviço que a enumeração profunda de mDNS passa a descobrir."""
+
+    @pytest.mark.parametrize(
+        "servico,esperado",
+        [
+            ("sonos", "ASSISTENTE"),
+            ("soundtouch", "ASSISTENTE"),
+            ("axis-video", "CAMERA"),
+            ("esphomelib", "IOT"),
+            ("octoprint", "IOT"),
+            ("hue", "IOT"),
+            ("home-assistant", "SERVIDOR"),
+            ("uscan", "IMPRESSORA"),
+        ],
+    )
+    def test_servico_decisivo(self, servico, esperado):
+        dev, palpite = classificar(services={servico})
+        assert dev.label == esperado and palpite is False
+
+    @pytest.mark.parametrize("servico", ["afpovertcp", "sftp-ssh", "teamviewer", "nvstream"])
+    def test_compartilhamento_e_acesso_remoto_viram_computador(self, servico):
+        dev, _ = classificar(services={servico})
+        assert dev is tipos.COMPUTER

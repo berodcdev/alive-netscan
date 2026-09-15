@@ -3,6 +3,27 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/);
 versionamento [SemVer](https://semver.org/lang/pt-BR/).
 
+## [0.7.0] — 2026-09-15
+
+### Adicionado
+- **mDNS profundo**: além da lista fixa de serviços, o `alive` agora enumera o
+  meta-serviço DNS-SD (`_services._dns-sd._udp.local.`) e navega dinamicamente
+  todo tipo de serviço que a rede anuncia, dentro da mesma janela de tempo. É o
+  que desenha o mapa completo de serviços expostos por host — TeamViewer,
+  OctoPrint, ESPHome, Sonos, SFTP, AFP, câmera Axis e outros que a lista não
+  previa. A lista por host sai em `mdns_services` no `--json`. Desligável mantendo
+  o comportamento antigo com `deep=False`.
+- Novos tipos reconhecidos por serviço mDNS: Sonos/SoundTouch (assistente),
+  câmera Axis, ESPHome e OctoPrint e ponte Philips Hue (IoT), Home Assistant
+  (servidor), scanner (impressora); e compartilhamento/acesso remoto
+  (AFP, SFTP, DAAP, TeamViewer, GameStream) como computador.
+
+### Corrigido
+- A enumeração profunda trazia serviços cujo nome de instância é um identificador
+  opaco (o Mac anuncia `_asquic` com um UUID). A heurística de "preferir o nome
+  mais longo" deixava esse UUID sobrescrever o nome real do aparelho. Nomes
+  opacos (UUID, hex longo, sem letras) agora são descartados na escolha do nome.
+
 ## [0.6.0] — 2026-09-15
 
 ### Adicionado

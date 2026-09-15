@@ -43,16 +43,23 @@ _TYPE_ORDER = (
 )
 TYPE_RANK = {d.label: i for i, d in enumerate(_TYPE_ORDER)}
 
-# Serviços que, sozinhos, provam o tipo do aparelho.
+# Serviços que, sozinhos, provam o tipo do aparelho. Muitos vêm da enumeração
+# profunda de mDNS: cada tipo de serviço DNS-SD é um rótulo que denuncia o tipo.
 _DECISIVE: list[tuple[tuple[str, ...], DeviceType]] = [
     (("ios",), PHONE),          # porta 62078 (lockdownd): só iPhone/iPad
     (("adb",), PHONE),          # porta 5555: Android com depuração
-    (("ipp", "ipps", "pdl-datastream", "printer", "jetdirect"), PRINTER),
+    (("ipp", "ipps", "pdl-datastream", "printer", "jetdirect", "uscan", "scanner"),
+     PRINTER),
     (("amzn-alexa",), SPEAKER),
     (("amzn-wplay",), TV),
-    (("dvr",), CAMERA),         # porta 37777: DVR Dahua/Intelbras
+    (("sonos", "soundtouch"), SPEAKER),
+    (("dvr", "axis-video"), CAMERA),  # porta 37777 (DVR) ou câmera Axis via mDNS
     (("mikrotik",), NETDEV),
     (("plex", "jellyfin"), SBC),
+    (("esphomelib", "esphome"), IOT),
+    (("octoprint",), IOT),      # impressora 3D
+    (("hue", "philips-hue", "philipshue"), IOT),  # ponte Philips Hue
+    (("home-assistant", "hass"), SBC),
 ]
 
 # Fabricantes de equipamento de rede: se não é o gateway, é AP/repetidor/switch.
@@ -262,8 +269,12 @@ def classify(
         # A Intelbras vende de câmera a roteador; sem outro sinal, fica no palpite.
         return NETDEV, True
 
-    # 7) Serviços genéricos de sistema operacional completo.
+    # 7) Serviços genéricos de sistema operacional completo. Compartilhamento de
+    #    arquivos e acesso remoto anunciados por mDNS também denunciam um SO
+    #    completo (afpovertcp/sftp-ssh/daap = Apple/Unix; teamviewer/nvstream = PC).
     if _has(services, "rdp", "smb", "afp", "vnc"):
+        return COMPUTER, False
+    if _has(services, "afpovertcp", "sftp-ssh", "daap", "teamviewer", "nvstream"):
         return COMPUTER, False
     if _has(services, "workstation", "ssh"):
         return COMPUTER, not _has(services, "workstation")

@@ -19,9 +19,9 @@ IP, MAC, fabricante e o **tipo** provável de cada aparelho — `ROTEADOR`, `RED
 
 Funciona em **macOS e Linux** sem exigir root: usa `nmap` quando disponível e, caso
 contrário, faz um *ping sweep* paralelo combinado com a tabela ARP. Nome e tipo vêm de
-sete sinais independentes — DNS reverso, mDNS/Bonjour, NetBIOS, SSDP/UPnP, fingerprint
-por portas TCP, SNMP (`sysDescr`) e o certificado TLS do aparelho — mais a base de
-fabricantes OUI (offline).
+sete sinais independentes — DNS reverso, mDNS/Bonjour (com enumeração profunda de
+serviços DNS-SD), NetBIOS, SSDP/UPnP, fingerprint por portas TCP, SNMP (`sysDescr`)
+e o certificado TLS do aparelho — mais a base de fabricantes OUI (offline).
 
 Com `--watch`, fica monitorando e avisa **quem entra e quem sai** da rede. E ao final de cada
 varredura lista os **achados**: serviço em texto puro exposto, câmera com RTSP aberto, ADB

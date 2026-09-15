@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import socket
 import threading
 import time
@@ -139,6 +140,12 @@ MDNS_SERVICES = [
     "_rdlink._tcp.local.",
 ]
 
+# Meta-serviço do DNS-SD: navegá-lo enumera *todos* os tipos de serviço
+# anunciados na rede, não só os que conhecemos de antemão. É o que revela o
+# mapa completo de superfície: TeamViewer, OctoPrint, ESPHome, Sonos, SFTP,
+# compartilhamento AFP/SMB, câmera Axis — serviços que a lista fixa não previa.
+_META_SERVICE = "_services._dns-sd._udp.local."
+
 
 # Chaves de TXT que carregam o modelo do aparelho, por serviço:
 #   model  -> _device-info/_airplay ("MacBookAir10,1", "AppleTV6,2")
@@ -168,6 +175,46 @@ def humanize_model(raw: Optional[str]) -> Optional[str]:
     return s
 
 
+# Nome de instância opaco: UUID, string hex longa ou algo sem nenhuma letra. A
+# enumeração profunda traz serviços cujo nome é um identificador interno
+# (o Mac anuncia _asquic com um UUID). Sem filtrar, esse UUID mais longo
+# sobrescrevia "Macbook Pro M4 berodc" na heurística de "preferir o mais longo".
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
+_HEXISH_RE = re.compile(r"^[0-9a-f]{12,}$", re.I)
+
+
+def _looks_opaque(name: str) -> bool:
+    """True se o nome é um identificador de máquina, não um nome legível."""
+    s = name.strip()
+    if not s or _UUID_RE.match(s) or _HEXISH_RE.match(s.replace(":", "")):
+        return True
+    # Sem nenhuma letra (só dígitos, hex e pontuação) não é nome de gente.
+    return not any(c.isalpha() for c in s)
+
+
+def _instance_name(name: str, service_type: str) -> str:
+    """Nome de instância limpo: sem o sufixo do tipo nem o prefixo de MAC."""
+    friendly = name.split("." + service_type.split(".")[0])[0].rstrip(".")
+    # Serviços raop/airplay prefixam com o MAC: "AABBCCDDEEFF@Nome".
+    if "@" in friendly:
+        friendly = friendly.split("@", 1)[1]
+    return friendly
+
+
+def _pick_name(current: Optional[str], candidate: str) -> Optional[str]:
+    """Escolhe entre o nome atual e um candidato.
+
+    Um candidato opaco (UUID/hex da enumeração profunda) nunca ganha. Entre
+    nomes legíveis, o mais descritivo (mais longo) vence; e um nome legível
+    substitui um opaco que tenha escapado antes.
+    """
+    if not candidate or _looks_opaque(candidate):
+        return current
+    if not current or _looks_opaque(current) or len(candidate) > len(current):
+        return candidate
+    return current
+
+
 def _extract_model(props: dict) -> Optional[str]:
     for key in _MODEL_KEYS:
         val = props.get(key)
@@ -179,8 +226,12 @@ def _extract_model(props: dict) -> Optional[str]:
     return None
 
 
-def discover_mdns(duration: float = 3.0) -> dict[str, dict]:
+def discover_mdns(duration: float = 3.0, deep: bool = True) -> dict[str, dict]:
     """Navega serviços mDNS por ``duration`` segundos.
+
+    Com ``deep`` (padrão), também enumera o meta-serviço DNS-SD e navega
+    dinamicamente todo tipo de serviço anunciado na rede, não só a lista fixa —
+    é o que desenha o mapa completo de serviços expostos por host.
 
     Retorna {ip: {"name": str|None, "services": set[str], "model": str|None,
                   "props": dict}}.
@@ -219,14 +270,10 @@ def discover_mdns(duration: float = 3.0) -> dict[str, dict]:
             if props.get("fn") and not entry["name"]:
                 entry["name"] = props["fn"]
         if name:
-            # Nome instância antes do tipo, ex.: "Sala de Estar._googlecast._tcp"
-            friendly = name.split("." + service_type.split(".")[0])[0].rstrip(".")
-            # Serviços raop/airplay prefixam com o MAC: "AABBCCDDEEFF@Nome".
-            if "@" in friendly:
-                friendly = friendly.split("@", 1)[1]
-            # Preferir um nome mais descritivo do que o já registrado.
-            if friendly and (not entry["name"] or len(friendly) > len(entry["name"])):
-                entry["name"] = friendly
+            # Nome instância antes do tipo, ex.: "Sala de Estar._googlecast._tcp".
+            entry["name"] = _pick_name(
+                entry["name"], _instance_name(name, service_type)
+            )
 
     class _Listener(ServiceListener):
         def add_service(self, zc: "Zeroconf", type_: str, name: str) -> None:
@@ -266,12 +313,57 @@ def discover_mdns(duration: float = 3.0) -> dict[str, dict]:
                 _record(addr, info.name, type_, props)
 
     zc = None
+    browsers: list = []
+    browsers_lock = threading.Lock()
+    browsing: set[str] = set()
+
+    def _browse(zc: "Zeroconf", listener: "ServiceListener", service_type: str) -> None:
+        """Abre um ServiceBrowser para um tipo, no máximo uma vez por tipo."""
+        with browsers_lock:
+            if service_type in browsing:
+                return
+            browsing.add(service_type)
+        try:
+            browser = ServiceBrowser(zc, service_type, listener)
+        except Exception:  # noqa: BLE001 - tipo malformado não pode derrubar o scan
+            return
+        with browsers_lock:
+            browsers.append(browser)
+
+    class _MetaListener(ServiceListener):
+        """Ouve o meta-serviço: cada 'nome' anunciado é um tipo de serviço novo."""
+
+        def __init__(self, target: "ServiceListener") -> None:
+            self.target = target
+
+        def add_service(self, zc: "Zeroconf", type_: str, name: str) -> None:
+            if name and name != _META_SERVICE:
+                _browse(zc, self.target, name)
+
+        def update_service(self, zc: "Zeroconf", type_: str, name: str) -> None:
+            self.add_service(zc, type_, name)
+
+        def remove_service(self, zc: "Zeroconf", type_: str, name: str) -> None:
+            pass
+
     try:
         zc = Zeroconf()
         listener = _Listener()
-        browsers = [ServiceBrowser(zc, svc, listener) for svc in MDNS_SERVICES]
+        # Tipos conhecidos primeiro: resolvem os aparelhos comuns de imediato.
+        for svc in MDNS_SERVICES:
+            _browse(zc, listener, svc)
+        # Enumeração dinâmica: navega o meta-serviço e abre um browser para cada
+        # tipo novo que a rede anunciar, dentro da mesma janela de tempo.
+        if deep:
+            with browsers_lock:
+                browsers.append(ServiceBrowser(zc, _META_SERVICE, _MetaListener(listener)))
         _time.sleep(duration)
-        for b in browsers:
+        # Uma folga curta deixa os tipos descobertos no fim da janela resolverem.
+        if deep:
+            _time.sleep(min(1.0, duration / 2))
+        with browsers_lock:
+            snapshot = list(browsers)
+        for b in snapshot:
             try:
                 b.cancel()
             except Exception:  # noqa: BLE001

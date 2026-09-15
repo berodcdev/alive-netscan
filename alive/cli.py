@@ -514,6 +514,7 @@ def _collect(
                 "vendor": vendor,
                 "model": model,
                 "services": services,
+                "mdns_services": sorted(m.get("services") or []),
                 "banners": b,
                 "snmp": s,
                 "tls": tls,
