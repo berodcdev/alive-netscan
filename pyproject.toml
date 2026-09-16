@@ -13,8 +13,10 @@ license-files = ["LICENSE"]
 authors = [{ name = "Bernardo", email = "dev@bernardorodc.com" }]
 keywords = ["network", "scanner", "wifi", "discovery", "arp", "mdns", "bonjour"]
 classifiers = [
+    "Development Status :: 4 - Beta",
     "Environment :: Console",
     "Intended Audience :: System Administrators",
+    "Intended Audience :: Information Technology",
     "Operating System :: MacOS",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
@@ -24,6 +26,8 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: System :: Networking :: Monitoring",
+    "Topic :: System :: Systems Administration",
+    "Topic :: Security",
 ]
 dependencies = [
     "rich>=13.0",
@@ -38,6 +42,8 @@ dev = ["pytest>=7.0", "ruff>=0.5"]
 [project.urls]
 Homepage = "https://github.com/berodcdev/alive-netscan"
 Repository = "https://github.com/berodcdev/alive-netscan"
+Changelog = "https://github.com/berodcdev/alive-netscan/blob/main/CHANGELOG.md"
+Issues = "https://github.com/berodcdev/alive-netscan/issues"
 
 [project.scripts]
 alive = "alive.cli:main"

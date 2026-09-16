@@ -1,0 +1,27 @@
+# Maintainer: Bernardo <dev@bernardorodc.com>
+pkgname=alive-netscan
+pkgver=0.10.0
+pkgrel=1
+pkgdesc="Descoberta amigável de hosts vivos na rede local, com recon e achados de segurança"
+arch=('any')
+url="https://github.com/berodcdev/alive-netscan"
+license=('MIT')
+depends=('python' 'python-rich' 'python-rich-argparse' 'python-zeroconf')
+optdepends=('python-mac-vendor-lookup: nome do fabricante pelo MAC (OUI)'
+            'nmap: varredura mais completa e captura de MAC'
+            'sudo: detecção de DHCP rogue (porta 68 privilegiada)')
+makedepends=('python-build' 'python-installer' 'python-wheel' 'python-setuptools')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+# 'SKIP' até a tag v$pkgver existir no GitHub; fixado com `updpkgsums` no lançamento.
+sha256sums=('SKIP')
+
+build() {
+  cd "$srcdir/$pkgname-$pkgver"
+  python -m build --wheel --no-isolation
+}
+
+package() {
+  cd "$srcdir/$pkgname-$pkgver"
+  python -m installer --destdir="$pkgdir" dist/*.whl
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

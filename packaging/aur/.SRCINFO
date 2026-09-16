@@ -1,0 +1,22 @@
+pkgbase = alive-netscan
+	pkgdesc = Descoberta amigável de hosts vivos na rede local, com recon e achados de segurança
+	pkgver = 0.10.0
+	pkgrel = 1
+	url = https://github.com/berodcdev/alive-netscan
+	arch = any
+	license = MIT
+	makedepends = python-build
+	makedepends = python-installer
+	makedepends = python-wheel
+	makedepends = python-setuptools
+	depends = python
+	depends = python-rich
+	depends = python-rich-argparse
+	depends = python-zeroconf
+	optdepends = python-mac-vendor-lookup: nome do fabricante pelo MAC (OUI)
+	optdepends = nmap: varredura mais completa e captura de MAC
+	optdepends = sudo: detecção de DHCP rogue (porta 68 privilegiada)
+	source = alive-netscan-0.10.0.tar.gz::https://github.com/berodcdev/alive-netscan/archive/refs/tags/v0.10.0.tar.gz
+	sha256sums = SKIP
+
+pkgname = alive-netscan

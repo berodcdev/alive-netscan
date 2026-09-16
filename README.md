@@ -45,6 +45,20 @@ gateway** — a assinatura de um ataque man-in-the-middle em andamento.
 
 ## Instalação
 
+**Via PyPI** (recomendado — `pipx` isola as dependências):
+
+```bash
+pipx install alive-netscan     # ou: pip install --user alive-netscan
+```
+
+**Arch Linux** (AUR):
+
+```bash
+yay -S alive-netscan           # ou paru, ou makepkg em packaging/aur/
+```
+
+**Via script** (clona e monta um ambiente isolado, sem tocar no Python do sistema):
+
 ```bash
 git clone https://github.com/berodcdev/alive-netscan.git
 cd alive-netscan

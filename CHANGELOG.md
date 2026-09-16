@@ -3,6 +3,22 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/);
 versionamento [SemVer](https://semver.org/lang/pt-BR/).
 
+## [0.10.0] — 2026-09-15
+
+### Adicionado
+- **Empacotamento para distribuição.** O `alive` agora é instalável por
+  `pipx install alive-netscan` (PyPI) e, no Arch, pelo AUR
+  (`packaging/aur/PKGBUILD`) — sem precisar clonar o repositório. O
+  `install.sh` continua como terceira opção.
+- Workflow `publish.yml`: ao empurrar uma tag `vX.Y.Z`, faz o build, confere que
+  a tag bate com a versão do pacote e publica no PyPI via Trusted Publishing
+  (OIDC, sem token no repositório).
+- `RELEASING.md` documentando o processo de lançamento (PyPI + AUR).
+
+### Alterado
+- Metadados do pacote enriquecidos (classifiers de segurança/rede, URLs de
+  changelog e issues) para a página do PyPI.
+
 ## [0.9.0] — 2026-09-15
 
 ### Adicionado

@@ -1,0 +1,54 @@
+name: publish
+
+# Publica no PyPI quando uma tag de versão (vX.Y.Z) é empurrada.
+# Usa Trusted Publishing (OIDC): nenhum token fica no repositório. É preciso
+# registrar este publicador uma vez em https://pypi.org/manage/project/alive-netscan/settings/publishing/
+# (owner: berodcdev, repo: alive-netscan, workflow: publish.yml, environment: pypi).
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build e verifica
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: instalar ferramentas de build
+        run: python -m pip install --upgrade build twine
+      - name: build sdist + wheel
+        run: python -m build
+      - name: conferir metadados
+        run: python -m twine check dist/*
+      - name: confirmar que a tag bate com a versão do pacote
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(python -c 'import alive; print(alive.__version__)')"
+          echo "tag=$tag  pacote=$pkg"
+          test "$tag" = "$pkg" || { echo "tag e versão do pacote divergem"; exit 1; }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    name: publica no PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write  # exigido pelo Trusted Publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
