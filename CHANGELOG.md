@@ -3,6 +3,25 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/);
 versionamento [SemVer](https://semver.org/lang/pt-BR/).
 
+## [1.0.0] — 2026-09-15
+
+Primeiro marco estável. Desde a 0.4.0, o `alive` passou de um inventário da rede
+para um auditor de segurança da LAN: detecção de MITM (ARP spoofing, DHCP rogue),
+coleta SNMP e de certificado TLS, mDNS profundo, alerta de credencial padrão,
+auditoria de câmeras (exposição na internet, RTSP/ONVIF sem senha) e saída
+armável, tudo sem jamais testar credencial, capturar vídeo ou explorar nada.
+
+### Adicionado
+- **Incoerência de TTL contra tipo do aparelho.** Um aparelho que o fabricante e
+  os serviços identificam com certeza como celular, TV, câmera ou IoT, mas cujo
+  TTL denuncia Windows, é incoerente — MAC forjado, VM ou NAT no caminho. Vira
+  achado `medio`. Só dispara com o tipo confirmado (não palpite): um MAC
+  aleatório com TTL de Windows costuma ser só um notebook, que também sorteia o
+  MAC no WiFi, então esse caso é deixado de fora de propósito.
+
+### Alterado
+- Status do projeto promovido para estável (`Production/Stable`).
+
 ## [0.16.0] — 2026-09-15
 
 ### Adicionado

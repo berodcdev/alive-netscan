@@ -1,6 +1,6 @@
 # Maintainer: Bernardo <dev@bernardorodc.com>
 pkgname=alive-netscan
-pkgver=0.10.0
+pkgver=1.0.0
 pkgrel=1
 pkgdesc="Descoberta amigável de hosts vivos na rede local, com recon e achados de segurança"
 arch=('any')
@@ -12,7 +12,7 @@ optdepends=('python-mac-vendor-lookup: nome do fabricante pelo MAC (OUI)'
             'sudo: detecção de DHCP rogue (porta 68 privilegiada)')
 makedepends=('python-build' 'python-installer' 'python-wheel' 'python-setuptools')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('f0d4bda6cc8c44c8ed88ad21f7848e137c22ebc3a30c51db676f95f869c8511a')
+sha256sums=('SKIP')  # fixado com updpkgsums após a tag v1.0.0
 
 build() {
   cd "$srcdir/$pkgname-$pkgver"

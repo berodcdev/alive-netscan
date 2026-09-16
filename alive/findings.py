@@ -56,6 +56,13 @@ _RISKY_SERVICES: dict[str, tuple[str, str, str]] = {
 SEVERITY_ORDER = {"alto": 0, "medio": 1, "baixo": 2}
 SEVERITY_COLOR = {"alto": "bright_red", "medio": "yellow", "baixo": "bright_black"}
 
+# Tipos de aparelho que não rodam Windows: se o TTL disser Windows para um
+# deles (com o tipo confirmado), o sinal está incoerente.
+_NAO_WINDOWS = frozenset({
+    "CELULAR", "TV/STREAM", "ASSISTENTE", "IMPRESSORA", "CAMERA",
+    "IOT", "CONSOLE", "WEARABLE",
+})
+
 # Credencial padrão de fábrica: informação pública (manual do fabricante, avisos
 # de segurança), não um teste. O achado NÃO tenta logar em nada — só lembra o
 # dono de que aquele modelo sai de fábrica com um login conhecido, e que ele
@@ -232,6 +239,28 @@ def collect(
                     f"padrão ({creds}) — troque se ainda não trocou",
                     "entre no painel do aparelho e defina uma senha forte; "
                     "troque também o nome de usuário quando der",
+                )
+            )
+
+    # TTL (família de SO) contra o tipo do aparelho: um aparelho que o fabricante
+    # e os serviços identificam com certeza como celular/TV/câmera/IoT, mas cujo
+    # TTL denuncia Windows, é incoerente — MAC forjado, VM ou NAT no caminho.
+    # Só com tipo CONFIRMADO (não palpite): um MAC aleatório com TTL de Windows
+    # costuma ser só um notebook Windows, que também sorteia o MAC no WiFi.
+    for h in hosts:
+        if (
+            h.get("os_family") == "Windows"
+            and not h.get("inferred")
+            and (h["device"].label if h.get("device") else "") in _NAO_WINDOWS
+        ):
+            tipo = h["device"].label.lower()
+            vend = f" ({h['vendor']})" if h.get("vendor") else ""
+            out.append(
+                Finding(
+                    "medio", h["ip"],
+                    f"{_label(h)}: o TTL indica Windows, mas o aparelho é {tipo}"
+                    f"{vend} — pode ser MAC forjado, VM ou NAT no caminho",
+                    "confirme se este aparelho é mesmo o que diz ser",
                 )
             )
 

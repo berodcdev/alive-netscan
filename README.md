@@ -127,7 +127,7 @@ já troca sozinha). Cobre menos, mas não deixa rastro em IDS nem acorda aparelh
 | **Fingerprint** | fabricante por OUI (offline) + ~24 portas TCP (inclui 8443/8554 de câmera) + SNMP `public` + certificado TLS (CN/SAN) que identificam o aparelho |
 | **Classificação** | combina modelo, fabricante, serviços, portas, UPnP e hostname — marca `?` quando é palpite |
 | **Histórico** | compara com o scan anterior: marca quem é `NOVO`, quem saiu e há quanto tempo cada um é conhecido |
-| **Achados** | serviços expostos, MAC duplicado, sinais de ARP spoofing no gateway (MITM), servidor DHCP rogue, SNMP `public` aberto, certificado TLS vencido, aparelho com login de fábrica conhecido, câmera exposta à internet e os redirecionamentos de porta ativos no roteador — cada um com o que fazer a respeito |
+| **Achados** | serviços expostos, MAC duplicado, sinais de ARP spoofing no gateway (MITM), servidor DHCP rogue, SNMP `public` aberto, certificado TLS vencido, aparelho com login de fábrica conhecido, câmera exposta à internet, incoerência de TTL x tipo (spoof) e os redirecionamentos de porta ativos no roteador — cada um com o que fazer a respeito |
 
 Sem `nmap` ou sem `sudo`, o `alive` ainda funciona — apenas pode não ver aparelhos que
 ignoram ping. Instalar `nmap` e/ou rodar com `sudo` melhora a cobertura de MACs.

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "alive-netscan"
 dynamic = ["version"]
-description = "Descoberta amigável de hosts vivos na rede WiFi (macOS + Linux)."
+description = "Descoberta de hosts e auditoria de segurança da rede local, direto do terminal (macOS + Linux)."
 readme = "README.md"
 requires-python = ">=3.9"
 license = "MIT"
@@ -13,7 +13,7 @@ license-files = ["LICENSE"]
 authors = [{ name = "Bernardo", email = "dev@bernardorodc.com" }]
 keywords = ["network", "scanner", "wifi", "discovery", "arp", "mdns", "bonjour"]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Environment :: Console",
     "Intended Audience :: System Administrators",
     "Intended Audience :: Information Technology",

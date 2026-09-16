@@ -497,3 +497,41 @@ class TestFabricanteBotnet:
         h = host("192.168.0.30", device=classify.COMPUTER, vendor="Hikvision")
         h["services"] = {"ssh"}
         assert [f for f in findings.collect([h]) if "botnet" in f.message] == []
+
+
+class TestTtlContraTipo:
+    """TTL de Windows num tipo confirmado que não roda Windows = incoerência."""
+
+    def _h(self, dev, os_family="Windows", inferred=False, vendor="Dahua"):
+        h = host("192.168.0.9", vendor=vendor, device=dev)
+        h.update({"inferred": inferred, "os_family": os_family})
+        return h
+
+    def _ttl(self, achados):
+        return [f for f in achados if "TTL" in f.message]
+
+    def test_camera_confirmada_com_ttl_windows(self):
+        from alive import classify
+        (a,) = self._ttl(findings.collect([self._h(classify.CAMERA)]))
+        assert a.severity == "medio"
+        assert "camera" in a.message
+
+    def test_tipo_palpite_nao_alarma(self):
+        """MAC aleatório + TTL Windows costuma ser notebook Windows, não spoof."""
+        from alive import classify
+        h = self._h(classify.PHONE, inferred=True)
+        assert self._ttl(findings.collect([h])) == []
+
+    def test_computador_com_ttl_windows_e_normal(self):
+        from alive import classify
+        assert self._ttl(findings.collect([self._h(classify.COMPUTER)])) == []
+
+    def test_ttl_nao_windows_nao_alarma(self):
+        from alive import classify
+        h = self._h(classify.CAMERA, os_family="Linux/Apple")
+        assert self._ttl(findings.collect([h])) == []
+
+    def test_sem_os_family_nao_alarma(self):
+        from alive import classify
+        h = self._h(classify.CAMERA, os_family=None)
+        assert self._ttl(findings.collect([h])) == []
