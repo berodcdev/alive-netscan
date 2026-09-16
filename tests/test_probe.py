@@ -420,3 +420,21 @@ class TestOnvif:
         p = probe._ws_probe("abc123")
         assert b"Probe" in p and b"NetworkVideoTransmitter" in p
         assert b"uuid:abc123" in p
+
+
+class TestPortasAlternativas:
+    def test_8443_e_8554_no_mapa(self):
+        assert probe.PORT_SERVICE[8443] == "https"
+        assert probe.PORT_SERVICE[8554] == "rtsp"
+
+    def test_default_ports_inclui_as_alt(self):
+        assert 8443 in probe.DEFAULT_PORTS and 8554 in probe.DEFAULT_PORTS
+
+
+class TestOnvifDeviceInfo:
+    def test_rejeita_xaddr_de_outro_host(self):
+        """XAddrs vem do aparelho: só seguimos http do próprio IP que respondeu."""
+        assert probe.onvif_device_info("http://10.0.0.9/onvif", "192.168.0.50") is None
+
+    def test_rejeita_esquema_nao_http(self):
+        assert probe.onvif_device_info("file:///etc/passwd", "192.168.0.50") is None

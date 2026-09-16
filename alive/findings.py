@@ -123,6 +123,20 @@ def _is_camera(host: dict) -> bool:
     return label == "CAMERA" or bool(services & {"rtsp", "dvr"})
 
 
+# Fabricantes de câmera/DVR com histórico notório de firmware explorado em massa
+# (Mirai e variantes). É um aviso de higiene por marca — atualize e não exponha —,
+# não a afirmação de que este aparelho está vulnerável agora.
+_CAMERA_BOTNET_VENDORS = (
+    "hikvision", "dahua", "xiongmai", "xm ", "wansview", "foscam", "sricam",
+    "vstarcam", "shenzhen", "hisilicon", "goahead",
+)
+
+
+def _camera_botnet_vendor(host: dict) -> bool:
+    text = _host_text(host)
+    return any(v in text for v in _CAMERA_BOTNET_VENDORS)
+
+
 def _host_text(host: dict) -> str:
     """Tudo que identifica o aparelho, junto e em minúsculas, para casar marcas."""
     banners = host.get("banners") or {}
@@ -390,6 +404,33 @@ def collect(
                 )
             )
 
+    # Câmera que responde ONVIF sem autenticação: expõe modelo, firmware e
+    # serial a qualquer um na LAN. Mesmo espírito do SNMP public.
+    for h in hosts:
+        if (h.get("onvif") or {}).get("anon"):
+            out.append(
+                Finding(
+                    "medio", h["ip"],
+                    f"{_label(h)}: câmera responde a consultas ONVIF sem "
+                    "autenticação — fabricante, modelo e serial acessíveis na rede",
+                    "exija autenticação no ONVIF/painel da câmera",
+                )
+            )
+
+    # Câmera de fabricante com histórico de firmware vulnerável (Mirai e afins).
+    # Aviso de higiene, não teste: reconhece o fabricante e manda atualizar.
+    for h in hosts:
+        if _is_camera(h) and _camera_botnet_vendor(h):
+            out.append(
+                Finding(
+                    "baixo", h["ip"],
+                    f"{_label(h)}: câmeras deste fabricante são alvo frequente de "
+                    "botnet (Mirai e variantes)",
+                    "mantenha o firmware atualizado, senha forte e a câmera fora "
+                    "da internet",
+                )
+            )
+
     # Certificado TLS vencido: hosts com HTTPS cuja validade já passou.
     for h in hosts:
         tls = h.get("tls") or {}
@@ -422,4 +463,6 @@ def short_notes(host: dict) -> list[str]:
         notes.append("cert vencido!")
     if _default_cred_match(host):
         notes.append("senha padrão?")
+    if (host.get("onvif") or {}).get("anon"):
+        notes.append("onvif anônimo!")
     return notes

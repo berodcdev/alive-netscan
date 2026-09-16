@@ -38,6 +38,8 @@ PORT_SERVICE: dict[int, str] = {
     445: "smb",
     554: "rtsp",        # câmera IP / DVR
     631: "ipp",         # impressora
+    8443: "https",      # painel HTTPS alternativo (comum em câmera/NVR/NAS)
+    8554: "rtsp",       # stream RTSP alternativo (comum em câmera)
     1883: "mqtt",       # IoT
     3389: "rdp",        # Windows
     5555: "adb",        # Android com depuração
@@ -219,6 +221,37 @@ def _http_banner(ip: str, port: int, tls: bool, timeout: float) -> dict:
     return out
 
 
+def _rtsp_probe(ip: str, port: int, timeout: float) -> dict:
+    """OPTIONS + DESCRIBE numa porta RTSP. {rtsp_server, rtsp_auth} ou {}.
+
+    O DESCRIBE diz se o stream exige senha (401/403) ou responde aberto (200).
+    Lemos só a linha de status — nunca a mídia.
+    """
+    text = _read_socket(
+        ip, port,
+        f"OPTIONS rtsp://{ip}:{port}/ RTSP/1.0\r\nCSeq: 1\r\n\r\n".encode(),
+        timeout,
+    )
+    if not text:
+        return {}
+    out: dict = {}
+    server = _header(text, "Server")
+    if server:
+        out["rtsp_server"] = _clean(server, 40)
+    desc = _read_socket(
+        ip, port,
+        (f"DESCRIBE rtsp://{ip}:{port}/ RTSP/1.0\r\nCSeq: 2\r\n"
+         "Accept: application/sdp\r\n\r\n").encode(),
+        timeout,
+    )
+    status = desc.split("\r\n", 1)[0] if desc else ""
+    if " 401" in status or " 403" in status:
+        out["rtsp_auth"] = "required"
+    elif " 200" in status:
+        out["rtsp_auth"] = "open"
+    return out
+
+
 def grab_banners(
     services_by_ip: dict[str, set[str]], timeout: float = 1.5, workers: int = 32
 ) -> dict[str, dict]:
@@ -244,30 +277,19 @@ def grab_banners(
         if "http" in svcs:
             found.update(_http_banner(ip, 80, False, timeout))
         elif "https" in svcs:
-            found.update(_http_banner(ip, 443, True, timeout))
+            # Tenta a 443 e, se não veio nada, a 8443 (câmera/NVR/NAS costumam
+            # servir o painel HTTPS ali).
+            found.update(
+                _http_banner(ip, 443, True, timeout)
+                or _http_banner(ip, 8443, True, timeout)
+            )
         if "rtsp" in svcs:
-            text = _read_socket(
-                ip, 554,
-                f"OPTIONS rtsp://{ip}:554/ RTSP/1.0\r\nCSeq: 1\r\n\r\n".encode(),
-                timeout,
-            )
-            server = _header(text, "Server") if text else None
-            if server:
-                found["rtsp_server"] = _clean(server, 40)
-            # DESCRIBE diz se o stream exige senha (401) ou responde aberto (200).
-            # Lemos só a linha de status — nunca a mídia. É a diferença entre
-            # "câmera na rede" e "imagem acessível sem senha".
-            desc = _read_socket(
-                ip, 554,
-                (f"DESCRIBE rtsp://{ip}:554/ RTSP/1.0\r\nCSeq: 2\r\n"
-                 "Accept: application/sdp\r\n\r\n").encode(),
-                timeout,
-            )
-            status = desc.split("\r\n", 1)[0] if desc else ""
-            if " 401" in status or " 403" in status:
-                found["rtsp_auth"] = "required"
-            elif " 200" in status:
-                found["rtsp_auth"] = "open"
+            # 554 é o padrão; 8554 é o alternativo comum em câmera.
+            for porta in (554, 8554):
+                info = _rtsp_probe(ip, porta, timeout)
+                if info:
+                    found.update(info)
+                    break
         if found:
             with lock:
                 result[ip] = found
@@ -954,6 +976,9 @@ def discover_onvif(duration: float = 2.5) -> dict[str, dict]:
             entry = results.setdefault(addr[0], {"onvif": True})
             for k, v in _parse_onvif_scopes(xml).items():
                 entry.setdefault(k, v)
+            xaddr = (_tag(xml, "XAddrs") or "").split()
+            if xaddr and "xaddr" not in entry:
+                entry["xaddr"] = xaddr[0]
     except OSError:
         return results
     finally:
@@ -962,7 +987,71 @@ def discover_onvif(duration: float = 2.5) -> dict[str, dict]:
                 sock.close()
             except OSError:
                 pass
+
+    _fill_onvif_info(results)
     return results
+
+
+# GetDeviceInformation SEM credencial. Se a câmera responde, ela expõe
+# fabricante/modelo/firmware/serial a qualquer um na LAN — uma exposição real,
+# no mesmo espírito do "SNMP public". Não é login: só verificamos se ela EXIGE
+# um. 401/403 = protegida (o certo); 200 = anônima (o achado).
+_ONVIF_GETINFO = (
+    '<?xml version="1.0" encoding="UTF-8"?>'
+    '<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"><s:Body>'
+    '<GetDeviceInformation xmlns="http://www.onvif.org/ver10/device/wsdl"/>'
+    "</s:Body></s:Envelope>"
+).encode("utf-8")
+
+
+def onvif_device_info(xaddr: str, device_ip: str, timeout: float = 2.0) -> Optional[dict]:
+    """GetDeviceInformation anônimo. Retorna {model, firmware, serial, anon} ou None."""
+    from urllib.request import Request
+
+    safe = safe_device_url(xaddr, device_ip)
+    if not safe:
+        return None
+    req = Request(
+        safe, data=_ONVIF_GETINFO,
+        headers={"Content-Type": "application/soap+xml; charset=utf-8"},
+    )
+    try:
+        with _no_redirect_opener().open(req, timeout=timeout) as resp:
+            xml = resp.read(16384).decode("utf-8", "replace")
+    except Exception:  # noqa: BLE001 - 401/timeout/recusa: câmera protegida ou muda
+        return None
+    manufacturer = _tag(xml, "Manufacturer") or _tag(xml, "tds:Manufacturer")
+    model = _tag(xml, "Model") or _tag(xml, "tds:Model")
+    firmware = _tag(xml, "FirmwareVersion") or _tag(xml, "tds:FirmwareVersion")
+    if not (manufacturer or model):
+        return None
+    return {
+        "anon": True,
+        "model": " ".join(filter(None, [manufacturer, model])) or None,
+        "firmware": firmware,
+        "serial": _tag(xml, "SerialNumber") or _tag(xml, "tds:SerialNumber"),
+    }
+
+
+def _fill_onvif_info(results: dict[str, dict]) -> None:
+    """Para cada câmera com XAddrs, tenta o GetDeviceInformation anônimo."""
+    def fetch(item: tuple[str, dict]) -> None:
+        ip, entry = item
+        xaddr = entry.get("xaddr")
+        if not xaddr:
+            return
+        info = onvif_device_info(xaddr, ip)
+        if info:
+            entry["anon"] = True
+            for k in ("model", "firmware", "serial"):
+                if info.get(k) and not entry.get(k):
+                    entry[k] = info[k]
+
+    itens = [(ip, e) for ip, e in results.items() if e.get("xaddr")]
+    if not itens:
+        return
+    with ThreadPoolExecutor(max_workers=max(1, min(8, len(itens)))) as pool:
+        list(pool.map(fetch, itens))
 
 
 def _tag(xml: str, tag: str) -> Optional[str]:

@@ -453,3 +453,47 @@ class TestRtspAutenticacao:
         (a,) = self._rtsp(findings.collect([self._cam(None)]))
         assert a.severity == "alto"
         assert "aberto" in a.message
+
+
+class TestOnvifAnonimo:
+    def _cam(self, **onvif):
+        from alive import classify
+        h = host("192.168.0.50", device=classify.CAMERA)
+        h["services"] = {"rtsp"}
+        h["onvif"] = onvif
+        return h
+
+    def test_onvif_anonimo_e_medio(self):
+        (a,) = [f for f in findings.collect([self._cam(onvif=True, anon=True)])
+                if "ONVIF" in f.message]
+        assert a.severity == "medio"
+
+    def test_onvif_com_auth_nao_alarma(self):
+        h = self._cam(onvif=True)  # sem anon
+        assert [f for f in findings.collect([h]) if "ONVIF" in f.message] == []
+
+    def test_nota_onvif_anonimo(self):
+        assert "onvif anônimo!" in findings.short_notes(self._cam(anon=True))
+
+
+class TestFabricanteBotnet:
+    def _cam(self, vendor):
+        from alive import classify
+        h = host("192.168.0.50", device=classify.CAMERA, vendor=vendor)
+        h["services"] = {"rtsp"}
+        return h
+
+    def test_fabricante_conhecido_vira_aviso(self):
+        (a,) = [f for f in findings.collect([self._cam("Dahua Technology")])
+                if "botnet" in f.message]
+        assert a.severity == "baixo"
+
+    def test_fabricante_neutro_sem_aviso(self):
+        h = self._cam("Axis Communications")
+        assert [f for f in findings.collect([h]) if "botnet" in f.message] == []
+
+    def test_so_para_camera(self):
+        from alive import classify
+        h = host("192.168.0.30", device=classify.COMPUTER, vendor="Hikvision")
+        h["services"] = {"ssh"}
+        assert [f for f in findings.collect([h]) if "botnet" in f.message] == []

@@ -3,6 +3,23 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/);
 versionamento [SemVer](https://semver.org/lang/pt-BR/).
 
+## [0.16.0] — 2026-09-15
+
+### Adicionado
+- **Portas alternativas de câmera.** Além de 443 e 554, o `alive` sonda 8443
+  (painel HTTPS) e 8554 (stream RTSP) — onde câmeras e NVRs comumente escutam. A
+  captura de certificado TLS e a detecção de RTSP sem senha agora alcançam essas
+  portas.
+- **ONVIF sem autenticação.** Depois de descobrir uma câmera por ONVIF, o `alive`
+  pede `GetDeviceInformation` sem credencial. Se a câmera responde, ela expõe
+  fabricante, modelo, firmware e serial a qualquer um na LAN — achado `medio`, no
+  mesmo espírito do "SNMP public". Não é login: só verifica se ela exige um. De
+  quebra, enriquece modelo e firmware da câmera.
+- **Aviso de fabricante alvo de botnet.** Câmeras de fabricantes com histórico
+  notório de firmware explorado em massa (Mirai e variantes) recebem um aviso de
+  higiene `baixo`: mantenha o firmware atualizado e fora da internet. É um aviso
+  por marca, não a afirmação de que aquele aparelho está vulnerável.
+
 ## [0.15.0] — 2026-09-15
 
 ### Adicionado

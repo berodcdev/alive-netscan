@@ -124,7 +124,7 @@ já troca sozinha). Cobre menos, mas não deixa rastro em IDS nem acorda aparelh
 | **Scan** | `nmap -sn` (se houver) + ping sweep paralelo, guardando RTT e TTL; **a tabela ARP também é fonte de hosts** — é assim que aparecem os aparelhos que ignoram ping. O estado do vizinho é lido junto: quem veio de cache não revalidado é marcado como `ARP obsoleto`, não como presença confirmada |
 | **Nomes** | DNS reverso, mDNS/Bonjour, NetBIOS (Windows/Samba) e `friendlyName` do UPnP |
 | **Modelo** | TXT do mDNS (`MacBook Air`, `Chromecast Ultra`, modelo da impressora), `sysDescr` do SNMP, CN do certificado TLS, banner de SSH/HTTP/RTSP e família de SO pelo TTL |
-| **Fingerprint** | fabricante por OUI (offline) + ~22 portas TCP + SNMP `public` + certificado TLS (CN/SAN) que identificam o aparelho |
+| **Fingerprint** | fabricante por OUI (offline) + ~24 portas TCP (inclui 8443/8554 de câmera) + SNMP `public` + certificado TLS (CN/SAN) que identificam o aparelho |
 | **Classificação** | combina modelo, fabricante, serviços, portas, UPnP e hostname — marca `?` quando é palpite |
 | **Histórico** | compara com o scan anterior: marca quem é `NOVO`, quem saiu e há quanto tempo cada um é conhecido |
 | **Achados** | serviços expostos, MAC duplicado, sinais de ARP spoofing no gateway (MITM), servidor DHCP rogue, SNMP `public` aberto, certificado TLS vencido, aparelho com login de fábrica conhecido, câmera exposta à internet e os redirecionamentos de porta ativos no roteador — cada um com o que fazer a respeito |

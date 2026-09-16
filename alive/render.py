@@ -588,7 +588,9 @@ def _camera_exposure(cam: dict, exposed_ips: set) -> list[str]:
     if findings._default_cred_match(cam):
         linhas.append("[yellow]modelo com login de fábrica conhecido[/yellow]")
 
-    if cam.get("onvif"):
+    if (cam.get("onvif") or {}).get("anon"):
+        linhas.append("[yellow]responde ONVIF sem autenticação[/yellow]")
+    elif cam.get("onvif"):
         linhas.append("[dim]responde ONVIF[/dim]")
     if (cam.get("services") or set()) & {"http", "https"}:
         linhas.append("[dim]painel web na rede[/dim]")
