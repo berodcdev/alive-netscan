@@ -12,8 +12,7 @@ optdepends=('python-mac-vendor-lookup: nome do fabricante pelo MAC (OUI)'
             'sudo: detecção de DHCP rogue (porta 68 privilegiada)')
 makedepends=('python-build' 'python-installer' 'python-wheel' 'python-setuptools')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-# 'SKIP' até a tag v$pkgver existir no GitHub; fixado com `updpkgsums` no lançamento.
-sha256sums=('SKIP')
+sha256sums=('f0d4bda6cc8c44c8ed88ad21f7848e137c22ebc3a30c51db676f95f869c8511a')
 
 build() {
   cd "$srcdir/$pkgname-$pkgver"

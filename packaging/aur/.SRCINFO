@@ -17,6 +17,6 @@ pkgbase = alive-netscan
 	optdepends = nmap: varredura mais completa e captura de MAC
 	optdepends = sudo: detecção de DHCP rogue (porta 68 privilegiada)
 	source = alive-netscan-0.10.0.tar.gz::https://github.com/berodcdev/alive-netscan/archive/refs/tags/v0.10.0.tar.gz
-	sha256sums = SKIP
+	sha256sums = f0d4bda6cc8c44c8ed88ad21f7848e137c22ebc3a30c51db676f95f869c8511a
 
 pkgname = alive-netscan
