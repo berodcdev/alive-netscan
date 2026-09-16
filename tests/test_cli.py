@@ -337,3 +337,54 @@ class TestFlagCameras:
     def test_cameras_padrao_desligado(self):
         from alive import cli
         assert cli.build_parser().parse_args([]).cameras is False
+
+
+class TestWatchGatilho:
+    def _diff(self, gone=None):
+        from alive import history
+        d = history.Diff()
+        d.gone = gone or []
+        return d
+
+    def test_flag_on_event_existe(self):
+        assert cli.build_parser().parse_args(["--on-event", "x"]).on_event == "x"
+
+    def test_aparelho_novo_dispara(self):
+        env = cli._watch_event_env(
+            2, [{"ip": "192.168.0.99", "is_new": True}], self._diff(), [], "192.168.0.0/24", []
+        )
+        assert env["ALIVE_EVENT"] == "new"
+        assert "192.168.0.99" in env["ALIVE_NEW"]
+        assert "192.168.0.99" in env["ALIVE_SUMMARY"]
+
+    def test_ciclo_1_nao_dispara_por_novo(self):
+        """No 1º ciclo tudo é 'novo': disparar seria uma enxurrada."""
+        env = cli._watch_event_env(
+            1, [{"ip": "1.1.1.1", "is_new": True}], self._diff(), [], "x", []
+        )
+        assert env is None
+
+    def test_saida_de_aparelho_dispara(self):
+        env = cli._watch_event_env(
+            3, [], self._diff(gone=[{"ip": "192.168.0.9"}]), [], "x", []
+        )
+        assert env["ALIVE_EVENT"] == "gone" and "192.168.0.9" in env["ALIVE_GONE"]
+
+    def test_achado_grave_novo_dispara(self):
+        from alive.findings import Finding
+        env = cli._watch_event_env(
+            2, [], self._diff(), [], "x", [Finding("alto", "192.168.0.5", "x")]
+        )
+        assert env["ALIVE_EVENT"] == "finding" and env["ALIVE_FINDINGS_HIGH"] == "1"
+
+    def test_nada_acontece_retorna_none(self):
+        assert cli._watch_event_env(2, [], self._diff(), [], "x", []) is None
+
+    def test_fire_event_roda_o_comando(self, tmp_path):
+        marca = tmp_path / "ping.txt"
+        cli._fire_event(f"echo $ALIVE_EVENT > {marca}", {"ALIVE_EVENT": "new"}, False)
+        assert marca.read_text().strip() == "new"
+
+    def test_fire_event_comando_ruim_nao_quebra(self):
+        # não deve levantar exceção
+        cli._fire_event("comando-que-nao-existe-12345", {"ALIVE_EVENT": "new"}, False)

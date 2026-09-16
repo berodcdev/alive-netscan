@@ -53,6 +53,7 @@ EPILOG = """\
   [green]alive --with-service smb[/green]       [dim]# só quem expõe SMB[/dim]
   [green]alive --json > recon.json[/green]      [dim]# exporta o resultado em JSON[/dim]
   [green]alive --watch --json[/green]           [dim]# NDJSON: uma linha por ciclo[/dim]
+  [green]alive --watch --on-event notify-send ...[/green] [dim]# avisa quando algo muda[/dim]
   [green]alive --fail-on alto[/green]           [dim]# código 3 se houver achado grave[/dim]
 
 [bold green]nota[/bold green]
@@ -199,6 +200,11 @@ def build_parser() -> argparse.ArgumentParser:
     monitor.add_argument(
         "--no-history", action="store_true",
         help="não comparar com o scan anterior nem marcar dispositivos novos.",
+    )
+    monitor.add_argument(
+        "--on-event", metavar="CMD",
+        help="no --watch, roda este comando quando entra aparelho novo, sai um, ou "
+             "surge achado grave [dim](contexto em variáveis ALIVE_*; ex.: notify-send)[/dim].",
     )
 
     saida = parser.add_argument_group("saída")
@@ -746,6 +752,69 @@ def _staged(args, quiet: bool, label: str, fn):
     return result
 
 
+def _fire_event(cmd: str, env_extra: dict, verbose: bool) -> None:
+    """Roda o comando de --on-event com o contexto em variáveis ALIVE_*.
+
+    O comando é do próprio usuário, passado na linha de comando: rodá-lo pelo
+    shell é o comportamento pretendido (como um hook). Best-effort e com teto de
+    tempo, para um gatilho lento nunca travar o monitoramento.
+    """
+    import os
+    import subprocess
+
+    env = dict(os.environ)
+    env.update({k: v for k, v in env_extra.items() if v is not None})
+    try:
+        subprocess.run(
+            cmd, shell=True, env=env, timeout=15, check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=None if verbose else subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.SubprocessError):
+        if verbose:
+            render.warn("comando de --on-event falhou")
+
+
+def _watch_event_env(
+    cycle: int, hosts: list, diff: history.Diff, found: list, cidr: Optional[str],
+    new_high: list,
+) -> Optional[dict]:
+    """Monta o ambiente do evento, ou None se nada digno de gatilho aconteceu."""
+    novos = [h for h in hosts if h.get("is_new")] if cycle > 1 else []
+    gone = diff.gone if cycle > 1 else []
+    if not (novos or gone or new_high):
+        return None
+
+    tipos = []
+    if novos:
+        tipos.append("new")
+    if gone:
+        tipos.append("gone")
+    if new_high:
+        tipos.append("finding")
+
+    def _ips(items, chave="ip"):
+        return " ".join(x.get(chave, "") for x in items)
+
+    resumo_partes = []
+    if novos:
+        resumo_partes.append(f"{len(novos)} novo(s): {_ips(novos)}")
+    if gone:
+        resumo_partes.append(f"{len(gone)} saiu(ram): {_ips(gone)}")
+    if new_high:
+        resumo_partes.append(f"{len(new_high)} achado(s) grave(s)")
+
+    return {
+        "ALIVE_EVENT": ",".join(tipos),
+        "ALIVE_CYCLE": str(cycle),
+        "ALIVE_CIDR": cidr or "",
+        "ALIVE_NEW": _ips(novos),
+        "ALIVE_GONE": _ips(gone),
+        "ALIVE_FINDINGS_HIGH": str(len(new_high)),
+        "ALIVE_SUMMARY": " · ".join(resumo_partes),
+    }
+
+
 def _run_watch(
     args: argparse.Namespace,
     netinfo: net.NetInfo,
@@ -766,12 +835,24 @@ def _run_watch(
             f"monitorando [bold green]{netinfo.cidr}[/bold green] "
             f"[dim](ciclo de {interval:.0f}s · {method} · ctrl-c para sair)[/dim]"
         )
+    on_event = getattr(args, "on_event", None)
+    verbose = getattr(args, "verbose", False)
+    prev_high: set = set()
     cycle = 0
     while True:
         cycle += 1
         hosts, diff, found = _collect(
             args, netinfo, use_nmap=use_nmap, quiet=args.json
         )
+        # Achados graves que ainda não existiam no ciclo anterior — para o gatilho
+        # não repetir a cada ciclo enquanto o mesmo problema persiste.
+        high_now = {f.ip for f in found if f.severity == "alto" and f.ip}
+        new_high = [f for f in found if f.severity == "alto" and f.ip in (high_now - prev_high)]
+        prev_high = high_now
+        if on_event:
+            env = _watch_event_env(cycle, hosts, diff, found, netinfo.cidr, new_high)
+            if env:
+                _fire_event(on_event, env, verbose)
         if args.json:
             print(render.watch_line(cycle, hosts, netinfo, found, diff), flush=True)
             time.sleep(interval)

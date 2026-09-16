@@ -102,6 +102,7 @@ alive -o csv > rede.csv         # uma linha por host, para planilha
 alive --with-service smb        # só hosts que expõem SMB (combina com -o)
 alive --cameras                 # foco em câmeras: exposição de cada uma
 alive --watch --json            # NDJSON: uma linha por ciclo, com os eventos
+alive --watch --on-event 'notify-send alive "$ALIVE_SUMMARY"'  # IDS caseiro: avisa no desktop
 alive --fail-on alto            # sai com código 3 se houver achado grave (cron/CI)
 alive -n 10.0.0.0/16 --force    # redes acima de /20 exigem --force
 ```

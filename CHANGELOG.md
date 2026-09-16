@@ -3,6 +3,19 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/);
 versionamento [SemVer](https://semver.org/lang/pt-BR/).
 
+## [0.15.0] — 2026-09-15
+
+### Adicionado
+- **Gatilho no monitoramento** (`--on-event CMD`). No `--watch`, roda um comando
+  quando entra um aparelho novo, sai um, ou surge um achado grave. Transforma o
+  `alive` num IDS caseiro: `alive --watch --on-event 'notify-send alive
+  \"$ALIVE_SUMMARY\"'` dá uma notificação de desktop quando aparece um
+  dispositivo estranho ou um DHCP rogue. O contexto vai em variáveis de ambiente
+  (`ALIVE_EVENT`, `ALIVE_NEW`, `ALIVE_GONE`, `ALIVE_SUMMARY`, `ALIVE_CIDR`,
+  `ALIVE_CYCLE`, `ALIVE_FINDINGS_HIGH`). Não dispara na enxurrada do 1º ciclo, e
+  um achado grave só dispara quando é novo — não repete a cada ciclo enquanto
+  persiste. O comando roda com teto de tempo, à prova de falha.
+
 ## [0.14.0] — 2026-09-15
 
 ### Adicionado
