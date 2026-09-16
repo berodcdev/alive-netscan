@@ -3,6 +3,19 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/);
 versionamento [SemVer](https://semver.org/lang/pt-BR/).
 
+## [0.11.0] — 2026-09-15
+
+### Adicionado
+- **Alerta de credencial padrão de fábrica.** Aparelhos cujo modelo/fabricante
+  costuma sair de fábrica com login conhecido (Dahua, Hikvision, Intelbras,
+  MikroTik, TP-Link, Ubiquiti, ONT de operadora ZTE/Huawei/Sagemcom, entre
+  outros) viram achado, com o login padrão citado e a orientação de trocar. É
+  **informação pública** (manual do fabricante), **nunca um teste de login**: o
+  `alive` não tenta autenticar em nada. Só dispara quando o aparelho tem uma
+  superfície de administração de fato exposta (http, telnet, SSH, RTSP...), para
+  o alerta ser acionável, e usa guarda de tipo para não confundir a ONT Huawei
+  com o celular Huawei. Marca `senha padrão?` na coluna DETALHE.
+
 ## [0.10.0] — 2026-09-15
 
 ### Adicionado

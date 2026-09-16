@@ -298,3 +298,75 @@ class TestDhcpRogue:
     def test_dhcp_vazio_nao_alarma(self):
         assert [f for f in findings.collect([], gateway=self.GW, dhcp=[])
                 if "DHCP" in f.message] == []
+
+
+class TestCredencialPadrao:
+    """Alerta de login de fábrica: informa, nunca testa. Só com admin exposto."""
+
+    def _h(self, ip, vendor=None, services=None, device=None, **k):
+        from alive import classify
+        h = host(ip, vendor=vendor, device=device or classify.UNKNOWN)
+        h["services"] = services or set()
+        h.update(k)
+        return h
+
+    def _cred(self, achados):
+        return [f for f in achados if "login" in f.message]
+
+    def test_camera_dahua_com_rtsp(self):
+        from alive import classify
+        h = self._h("192.168.0.50", vendor="Dahua Technology",
+                    services={"rtsp", "http"}, device=classify.CAMERA)
+        (a,) = self._cred(findings.collect([h]))
+        assert a.severity == "alto"
+        assert "admin / admin" in a.message
+
+    def test_roteador_tplink_com_http(self):
+        from alive import classify
+        h = self._h("192.168.0.1", vendor="TP-Link", services={"http"},
+                    device=classify.ROUTER)
+        (a,) = self._cred(findings.collect([h]))
+        assert a.severity == "medio"
+
+    def test_sem_superficie_de_admin_nao_alarma(self):
+        from alive import classify
+        h = self._h("192.168.0.51", vendor="Dahua", services=set(),
+                    device=classify.CAMERA)
+        assert self._cred(findings.collect([h])) == []
+
+    def test_guarda_de_tipo_ignora_celular_huawei(self):
+        from alive import classify
+        h = self._h("192.168.0.8", vendor="Huawei", services={"http"},
+                    device=classify.PHONE)
+        assert self._cred(findings.collect([h])) == []
+
+    def test_huawei_ont_como_rede_alarma(self):
+        from alive import classify
+        h = self._h("192.168.0.1", vendor="Huawei", services={"http"},
+                    device=classify.NETDEV)
+        assert len(self._cred(findings.collect([h]))) == 1
+
+    def test_casa_por_banner_e_nao_so_fabricante(self):
+        from alive import classify
+        h = self._h("192.168.0.2", services={"http", "mikrotik"},
+                    device=classify.NETDEV, banners={"http_server": "MikroTik RouterOS"})
+        (a,) = self._cred(findings.collect([h]))
+        assert "em branco" in a.message
+
+    def test_fabricante_sem_perfil_nao_alarma(self):
+        from alive import classify
+        h = self._h("192.168.0.18", vendor="Apple", services={"ssh"},
+                    device=classify.COMPUTER)
+        assert self._cred(findings.collect([h])) == []
+
+    def test_nota_senha_padrao(self):
+        from alive import classify
+        h = self._h("192.168.0.50", vendor="Dahua", services={"http"},
+                    device=classify.CAMERA)
+        assert "senha padrão?" in findings.short_notes(h)
+
+    def test_um_achado_por_host(self):
+        from alive import classify
+        h = self._h("192.168.0.50", vendor="Dahua", services={"http", "rtsp"},
+                    device=classify.CAMERA)
+        assert len(self._cred(findings.collect([h]))) == 1

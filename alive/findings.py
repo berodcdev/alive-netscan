@@ -56,6 +56,40 @@ _RISKY_SERVICES: dict[str, tuple[str, str, str]] = {
 SEVERITY_ORDER = {"alto": 0, "medio": 1, "baixo": 2}
 SEVERITY_COLOR = {"alto": "bright_red", "medio": "yellow", "baixo": "bright_black"}
 
+# Credencial padrão de fábrica: informação pública (manual do fabricante, avisos
+# de segurança), não um teste. O achado NÃO tenta logar em nada — só lembra o
+# dono de que aquele modelo sai de fábrica com um login conhecido, e que ele
+# deve trocar se ainda não trocou. Só dispara quando o aparelho tem uma
+# superfície de administração de fato exposta (senão não há o que trocar aqui).
+#
+# {palavra no fabricante/modelo/banner: (login padrão, severidade, tipos|None)}
+# ``tipos`` restringe fabricantes ambíguos (Huawei/ZTE fazem ONT e celular).
+_DEFAULT_CREDS: list[tuple[tuple[str, ...], str, str, Optional[frozenset]]] = [
+    (("dahua",), "admin / admin", "alto", None),
+    (("hikvision",), "admin / 12345", "alto", None),
+    (("intelbras",), "admin / admin", "alto", frozenset({"CAMERA", "REDE", "ROTEADOR"})),
+    (("mikrotik", "routeros"), "admin / (em branco)", "alto", None),
+    (("axis",), "root / (definido no 1º acesso)", "medio", frozenset({"CAMERA"})),
+    (("reolink",), "admin / (em branco)", "medio", frozenset({"CAMERA"})),
+    (("ubiquiti", "ubnt", "unifi"), "ubnt / ubnt", "medio", None),
+    (("tp-link", "tplink"), "admin / admin", "medio", None),
+    (("mercusys",), "admin / admin", "medio", None),
+    (("d-link", "dlink"), "admin / (em branco)", "medio", None),
+    (("netgear",), "admin / password", "medio", None),
+    (("zyxel",), "admin / 1234", "medio", None),
+    (("technicolor",), "admin / admin", "medio", frozenset({"REDE", "ROTEADOR"})),
+    (("huawei",), "telecomadmin / admintelecom", "medio",
+     frozenset({"REDE", "ROTEADOR"})),
+    (("zte",), "admin / admin", "medio", frozenset({"REDE", "ROTEADOR"})),
+    (("sagemcom",), "admin / admin", "medio", frozenset({"REDE", "ROTEADOR"})),
+]
+
+# Serviços que representam uma superfície de administração alcançável: se algum
+# está aberto, a credencial padrão é acionável de fato.
+_ADMIN_SURFACE = frozenset(
+    {"http", "https", "telnet", "ssh", "rtsp", "dvr", "mikrotik", "jetdirect", "ipp"}
+)
+
 
 @dataclass
 class Finding:
@@ -80,6 +114,35 @@ def _ip_list(hosts: list[dict], limit: int = 5) -> str:
 def _label(host: dict) -> str:
     name = host.get("name")
     return f"{host['ip']} ({name})" if name else host["ip"]
+
+
+def _host_text(host: dict) -> str:
+    """Tudo que identifica o aparelho, junto e em minúsculas, para casar marcas."""
+    banners = host.get("banners") or {}
+    snmp = host.get("snmp") or {}
+    tls = host.get("tls") or {}
+    partes = [
+        host.get("vendor"), host.get("model"), host.get("name"),
+        *(str(v) for v in banners.values() if v),
+        snmp.get("descr"), snmp.get("name"),
+        tls.get("subject_cn"), tls.get("issuer"),
+    ]
+    return " ".join(p for p in partes if p).lower()
+
+
+def _default_cred_match(host: dict) -> Optional[tuple[str, str]]:
+    """Se o aparelho casa um perfil de credencial padrão, devolve (login, sev)."""
+    services = host.get("services") or set()
+    if not (services & _ADMIN_SURFACE):
+        return None  # sem superfície de admin exposta, não há o que acionar
+    text = _host_text(host)
+    label = host["device"].label if host.get("device") else ""
+    for keys, creds, severity, tipos in _DEFAULT_CREDS:
+        if tipos is not None and label not in tipos:
+            continue
+        if any(k in text for k in keys):
+            return creds, severity
+    return None
 
 
 def collect(
@@ -118,6 +181,19 @@ def collect(
                     Finding(severity, h["ip"], f"{_label(h)}: {text}",
                             fix.format(ip=h["ip"]))
                 )
+        # Credencial padrão de fábrica: só um alerta, nunca um teste de login.
+        cred = _default_cred_match(h)
+        if cred:
+            creds, severity = cred
+            out.append(
+                Finding(
+                    severity, h["ip"],
+                    f"{_label(h)}: este modelo costuma sair de fábrica com login "
+                    f"padrão ({creds}) — troque se ainda não trocou",
+                    "entre no painel do aparelho e defina uma senha forte; "
+                    "troque também o nome de usuário quando der",
+                )
+            )
 
     # --- MITM: o gateway é o alvo nº 1 de ARP spoofing numa rede interna. ---
 
@@ -297,4 +373,6 @@ def short_notes(host: dict) -> list[str]:
     tls = host.get("tls") or {}
     if tls.get("not_after") and tls["not_after"] < time.time():
         notes.append("cert vencido!")
+    if _default_cred_match(host):
+        notes.append("senha padrão?")
     return notes

@@ -125,7 +125,7 @@ já troca sozinha). Cobre menos, mas não deixa rastro em IDS nem acorda aparelh
 | **Fingerprint** | fabricante por OUI (offline) + ~22 portas TCP + SNMP `public` + certificado TLS (CN/SAN) que identificam o aparelho |
 | **Classificação** | combina modelo, fabricante, serviços, portas, UPnP e hostname — marca `?` quando é palpite |
 | **Histórico** | compara com o scan anterior: marca quem é `NOVO`, quem saiu e há quanto tempo cada um é conhecido |
-| **Achados** | serviços expostos, MAC duplicado, sinais de ARP spoofing no gateway (MITM), servidor DHCP rogue, SNMP `public` aberto, certificado TLS vencido e os redirecionamentos de porta ativos no roteador — cada um com o que fazer a respeito |
+| **Achados** | serviços expostos, MAC duplicado, sinais de ARP spoofing no gateway (MITM), servidor DHCP rogue, SNMP `public` aberto, certificado TLS vencido, aparelho com login de fábrica conhecido e os redirecionamentos de porta ativos no roteador — cada um com o que fazer a respeito |
 
 Sem `nmap` ou sem `sudo`, o `alive` ainda funciona — apenas pode não ver aparelhos que
 ignoram ping. Instalar `nmap` e/ou rodar com `sudo` melhora a cobertura de MACs.
@@ -221,6 +221,10 @@ para detectar servidor DHCP rogue. Não há teste de credencial, força bruta de
 community nem exploração — só o `public` universalmente conhecido, e só leitura. O
 DISCOVER nunca é seguido de REQUEST, então nenhum lease é fechado. O TLS não é verificado ao ler banner HTTPS, porque aparelhos de LAN usam
 certificado autoassinado — nenhum dado é enviado, só lido.
+
+O alerta de **credencial padrão** é só um aviso: o `alive` reconhece o modelo e lembra que ele
+sai de fábrica com um login conhecido (informação pública do manual), mas **nunca tenta
+autenticar** — não há login, força bruta nem verificação de senha.
 
 ## Licença
 
