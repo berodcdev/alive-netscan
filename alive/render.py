@@ -544,6 +544,7 @@ def to_json(
                 "banners": h.get("banners") or {},
                 "snmp": h.get("snmp") or {},
                 "tls": h.get("tls") or {},
+                "onvif": h.get("onvif") or {},
                 "services": sorted(h.get("services") or []),
                 "mdns_services": h.get("mdns_services") or [],
                 "rtt_ms": h.get("rtt"),

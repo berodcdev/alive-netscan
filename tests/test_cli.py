@@ -313,3 +313,17 @@ class TestOrdenacaoPorRisco:
         hosts = [{"ip": "192.168.0.9"}, {"ip": "192.168.0.1"}]
         assert [h["ip"] for h in cli._sort_by_risk(hosts, [])] == \
             ["192.168.0.1", "192.168.0.9"]
+
+
+class TestFlagOnvif:
+    def test_flag_no_onvif_existe(self):
+        from alive import cli
+        assert cli.build_parser().parse_args(["--no-onvif"]).no_onvif is True
+
+    def test_passivo_e_fast_desligam_onvif(self):
+        from alive import cli
+        a = cli.build_parser().parse_args(["--passive"])
+        cli._apply_passive(a)
+        b = cli.build_parser().parse_args(["--fast"])
+        cli._apply_fast(b)
+        assert a.no_onvif is True and b.no_onvif is True

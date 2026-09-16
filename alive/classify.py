@@ -53,7 +53,7 @@ _DECISIVE: list[tuple[tuple[str, ...], DeviceType]] = [
     (("amzn-alexa",), SPEAKER),
     (("amzn-wplay",), TV),
     (("sonos", "soundtouch"), SPEAKER),
-    (("dvr", "axis-video"), CAMERA),  # porta 37777 (DVR) ou câmera Axis via mDNS
+    (("dvr", "axis-video", "onvif"), CAMERA),  # DVR, câmera Axis (mDNS) ou ONVIF
     (("mikrotik",), NETDEV),
     (("plex", "jellyfin"), SBC),
     (("esphomelib", "esphome"), IOT),

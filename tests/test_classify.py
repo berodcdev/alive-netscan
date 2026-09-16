@@ -290,3 +290,9 @@ class TestMdnsProfundo:
     def test_compartilhamento_e_acesso_remoto_viram_computador(self, servico):
         dev, _ = classificar(services={servico})
         assert dev is tipos.COMPUTER
+
+
+class TestOnvif:
+    def test_servico_onvif_vira_camera(self):
+        dev, palpite = classificar(services={"onvif"})
+        assert dev is tipos.CAMERA and palpite is False

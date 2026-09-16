@@ -3,6 +3,22 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/);
 versionamento [SemVer](https://semver.org/lang/pt-BR/).
 
+## [0.13.0] — 2026-09-15
+
+### Adicionado
+- **Descoberta ONVIF/WS-Discovery** (fase 1 da auditoria de câmeras). Um Probe
+  multicast em `239.255.255.250:3702` faz as câmeras IP de segurança se
+  anunciarem com nome, modelo e localização (nos Scopes ONVIF), inclusive
+  câmeras que não falam SSDP nem mDNS. Responder ao ONVIF classifica o aparelho
+  como câmera com certeza. Só descoberta: lemos o anúncio, nunca o vídeo.
+  Desligável com `--no-onvif`; fora de `--passive` e `--fast`.
+- **Detecção de RTSP sem autenticação.** Além do `OPTIONS`, o `alive` manda um
+  `DESCRIBE` e lê só a linha de status: `401`/`403` = stream protegido por senha,
+  `200` = aberto. Com isso o achado de RTSP fica preciso — stream aberto sem
+  senha vira `alto` explícito ("qualquer um na rede vê a imagem"), e câmera
+  protegida por senha deixa de ser falso alarme. Nunca lemos a mídia.
+- Campo `onvif` na saída `--json`.
+
 ## [0.12.0] — 2026-09-15
 
 ### Adicionado

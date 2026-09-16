@@ -167,6 +167,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="pular a consulta SNMP com community public [dim](impressora, switch, AP)[/dim].",
     )
     veloc.add_argument(
+        "--no-onvif", action="store_true",
+        help="pular a descoberta ONVIF/WS-Discovery [dim](câmeras IP de segurança)[/dim].",
+    )
+    veloc.add_argument(
         "--no-dhcp", action="store_true",
         help="pular a detecção de servidor DHCP rogue [dim](requer sudo/root)[/dim].",
     )
@@ -298,6 +302,7 @@ def _apply_passive(args: argparse.Namespace) -> None:
     args.no_upnp = True
     args.no_snmp = True
     args.no_dhcp = True
+    args.no_onvif = True
 
 
 def _exit_code(found: list, fail_on: Optional[str]) -> int:
@@ -322,6 +327,7 @@ def _apply_fast(args: argparse.Namespace) -> None:
     args.no_netbios = True
     args.no_snmp = True
     args.no_dhcp = True
+    args.no_onvif = True
 
 
 # Parâmetros de furtividade que as sondas recebem. Ficam em ``args`` para o
@@ -542,6 +548,10 @@ def _collect(
     upnp = {} if args.no_upnp else _staged(
         args, quiet, "sondando SSDP/UPnP", lambda: probe.discover_ssdp(args.upnp_time)
     )
+    onvif = {} if getattr(args, "no_onvif", False) else _staged(
+        args, quiet, "procurando câmeras (ONVIF)",
+        lambda: probe.discover_onvif(args.upnp_time),
+    )
     netbios = {} if args.no_netbios else _staged(
         args, quiet, "consultando NetBIOS", lambda: probe.query_netbios(ips)
     )
@@ -599,16 +609,21 @@ def _collect(
         b = dict(banners.get(ip, {}))
         tls = b.pop("tls", None)
         s = snmp.get(ip, {})
+        onv = onvif.get(ip, {})
         services = set(m.get("services") or []) | set(ports.get(ip) or [])
+        # Uma câmera que respondeu ao ONVIF é câmera, ponto: o rótulo "onvif"
+        # alimenta a classificação decisiva.
+        if onv:
+            services.add("onvif")
         hostname = hostnames.get(ip)
-        # Ordem de nome: mDNS (mais amigável) > UPnP > SNMP sysName > NetBIOS > rDNS.
+        # Ordem de nome: mDNS (mais amigável) > UPnP > SNMP > ONVIF > NetBIOS > rDNS.
         name = (
             m.get("name") or u.get("name") or s.get("name")
-            or netbios.get(ip) or hostname
+            or onv.get("name") or netbios.get(ip) or hostname
         )
         vendor = (vendors.get(mac) if mac else None) or u.get("manufacturer")
         # Modelo: o aparelho dizendo o que é (TXT do mDNS) vale mais que o UPnP.
-        model = m.get("model") or u.get("model")
+        model = m.get("model") or u.get("model") or onv.get("model")
         os_family = scanner.os_family_from_ttl(h.get("ttl"))
 
         dev, inferred = classify.classify(
@@ -637,6 +652,7 @@ def _collect(
                 "banners": b,
                 "snmp": s,
                 "tls": tls,
+                "onvif": onv,
                 "device": dev,
                 "inferred": inferred,
                 "random_mac": scanner.is_random_mac(mac),

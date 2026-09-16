@@ -254,6 +254,20 @@ def grab_banners(
             server = _header(text, "Server") if text else None
             if server:
                 found["rtsp_server"] = _clean(server, 40)
+            # DESCRIBE diz se o stream exige senha (401) ou responde aberto (200).
+            # Lemos só a linha de status — nunca a mídia. É a diferença entre
+            # "câmera na rede" e "imagem acessível sem senha".
+            desc = _read_socket(
+                ip, 554,
+                (f"DESCRIBE rtsp://{ip}:554/ RTSP/1.0\r\nCSeq: 2\r\n"
+                 "Accept: application/sdp\r\n\r\n").encode(),
+                timeout,
+            )
+            status = desc.split("\r\n", 1)[0] if desc else ""
+            if " 401" in status or " 403" in status:
+                found["rtsp_auth"] = "required"
+            elif " 200" in status:
+                found["rtsp_auth"] = "open"
         if found:
             with lock:
                 result[ip] = found
@@ -864,6 +878,91 @@ def find_gateway_location(ssdp: dict, gateway_ip: Optional[str]) -> Optional[str
         return None
     entry = (ssdp or {}).get(gateway_ip) or {}
     return safe_device_url(entry.get("location"), gateway_ip)
+
+
+# --------------------------------------------------------------------------- #
+# ONVIF / WS-Discovery (3702/UDP)
+#
+# O padrão das câmeras IP de segurança. Um Probe multicast faz cada câmera se
+# anunciar com nome, fabricante e modelo (nos Scopes) — inclusive câmeras que
+# não falam SSDP nem mDNS. Só descoberta: lemos o anúncio, nunca o vídeo.
+# --------------------------------------------------------------------------- #
+_WS_DISCOVERY_ADDR = "239.255.255.250"
+_WS_DISCOVERY_PORT = 3702
+
+
+def _ws_probe(message_id: str) -> bytes:
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<e:Envelope xmlns:e="http://www.w3.org/2003/05/soap-envelope" '
+        'xmlns:w="http://schemas.xmlsoap.org/ws/2004/08/addressing" '
+        'xmlns:d="http://schemas.xmlsoap.org/ws/2005/04/discovery" '
+        'xmlns:dn="http://www.onvif.org/ver10/network/wsdl">'
+        f"<e:Header><w:MessageID>uuid:{message_id}</w:MessageID>"
+        "<w:To>urn:schemas-xmlsoap-org:ws:2005:04:discovery</w:To>"
+        "<w:Action>http://schemas.xmlsoap.org/ws/2005/04/discovery/Probe</w:Action>"
+        "</e:Header><e:Body><d:Probe>"
+        "<d:Types>dn:NetworkVideoTransmitter</d:Types>"
+        "</d:Probe></e:Body></e:Envelope>"
+    ).encode("utf-8")
+
+
+def _parse_onvif_scopes(xml: str) -> dict:
+    """Extrai nome/fabricante/modelo dos Scopes ONVIF de um ProbeMatch."""
+    info: dict = {}
+    scopes = _tag(xml, "Scopes") or _tag(xml, "d:Scopes") or ""
+    for token in scopes.split():
+        # onvif://www.onvif.org/name/Camera%20Sala, /hardware/IPC-123, /location/...
+        for chave, campo in (("/name/", "name"), ("/hardware/", "model"),
+                             ("/location/", "location")):
+            idx = token.lower().find(chave)
+            if idx >= 0 and campo not in info:
+                val = _clean(html.unescape(token[idx + len(chave):].replace("%20", " ")), 40)
+                if val:
+                    info[campo] = val
+    return info
+
+
+def discover_onvif(duration: float = 2.5) -> dict[str, dict]:
+    """Escuta respostas ONVIF WS-Discovery. Retorna {ip: {onvif, name, model}}."""
+    import os
+
+    results: dict[str, dict] = {}
+    probe = _ws_probe(os.urandom(8).hex())
+    sock = None
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
+        sock.settimeout(0.5)
+        for _ in range(2):  # UDP: duas tentativas cobrem perda de pacote
+            try:
+                sock.sendto(probe, (_WS_DISCOVERY_ADDR, _WS_DISCOVERY_PORT))
+            except OSError:
+                break
+        deadline = time.monotonic() + duration
+        while time.monotonic() < deadline:
+            try:
+                data, addr = sock.recvfrom(8192)
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+            xml = data.decode("utf-8", "replace")
+            if "ProbeMatch" not in xml:
+                continue
+            entry = results.setdefault(addr[0], {"onvif": True})
+            for k, v in _parse_onvif_scopes(xml).items():
+                entry.setdefault(k, v)
+    except OSError:
+        return results
+    finally:
+        if sock is not None:
+            try:
+                sock.close()
+            except OSError:
+                pass
+    return results
 
 
 def _tag(xml: str, tag: str) -> Optional[str]:

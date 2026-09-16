@@ -402,3 +402,21 @@ class TestDhcp:
         assert probe._mac_to_bytes("aa:bb:cc:dd:ee:ff") == b"\xaa\xbb\xcc\xdd\xee\xff"
         assert probe._mac_to_bytes(None) == b"\x00" * 6
         assert probe._mac_to_bytes("lixo") == b"\x00" * 6
+
+
+class TestOnvif:
+    def test_parse_scopes_nome_e_modelo(self):
+        xml = ("<ProbeMatch><Scopes>onvif://www.onvif.org/type/video_encoder "
+               "onvif://www.onvif.org/name/Camera%20Sala "
+               "onvif://www.onvif.org/hardware/IPC-HDW1230</Scopes></ProbeMatch>")
+        info = probe._parse_onvif_scopes(xml)
+        assert info["name"] == "Camera Sala"
+        assert info["model"] == "IPC-HDW1230"
+
+    def test_parse_scopes_sem_nada(self):
+        assert probe._parse_onvif_scopes("<Scopes></Scopes>") == {}
+
+    def test_ws_probe_bem_formado(self):
+        p = probe._ws_probe("abc123")
+        assert b"Probe" in p and b"NetworkVideoTransmitter" in p
+        assert b"uuid:abc123" in p

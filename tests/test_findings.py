@@ -426,3 +426,30 @@ class TestCameraExposta:
         h["services"] = {"dvr"}
         assert findings._is_camera(h) is True
         assert findings._is_camera(host("1.1.1.1", device=classify.COMPUTER)) is False
+
+
+class TestRtspAutenticacao:
+    """DESCRIBE distingue stream aberto de câmera protegida por senha."""
+
+    def _cam(self, rtsp_auth=None):
+        from alive import classify
+        h = host("192.168.0.50", device=classify.CAMERA)
+        h["services"] = {"rtsp"}
+        h["banners"] = {"rtsp_auth": rtsp_auth} if rtsp_auth else {}
+        return h
+
+    def _rtsp(self, achados):
+        return [f for f in achados if "RTSP" in f.message]
+
+    def test_aberto_sem_senha_e_alto(self):
+        (a,) = self._rtsp(findings.collect([self._cam("open")]))
+        assert a.severity == "alto"
+        assert "sem autenticação" in a.message
+
+    def test_protegido_por_senha_nao_e_achado(self):
+        assert self._rtsp(findings.collect([self._cam("required")])) == []
+
+    def test_auth_desconhecido_mantem_texto_generico(self):
+        (a,) = self._rtsp(findings.collect([self._cam(None)]))
+        assert a.severity == "alto"
+        assert "aberto" in a.message

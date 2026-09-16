@@ -181,13 +181,32 @@ def collect(
     for h in hosts:
         services = h.get("services") or set()
         for svc, (severity, text, fix) in _RISKY_SERVICES.items():
-            if svc in services:
-                # Uma câmera com RTSP é o funcionamento normal dela; o problema é
-                # o serviço estar acessível, então o texto já diz isso.
-                out.append(
-                    Finding(severity, h["ip"], f"{_label(h)}: {text}",
-                            fix.format(ip=h["ip"]))
-                )
+            if svc not in services:
+                continue
+            # RTSP é caso especial: se o DESCRIBE mostrou que exige senha, a
+            # câmera está protegida e não é achado; se respondeu aberto, é o pior
+            # caso e o texto diz isso; se não sabemos, cai no texto genérico.
+            if svc == "rtsp":
+                auth = (h.get("banners") or {}).get("rtsp_auth")
+                if auth == "required":
+                    continue
+                if auth == "open":
+                    out.append(
+                        Finding(
+                            "alto", h["ip"],
+                            f"{_label(h)}: RTSP (554) sem autenticação — "
+                            "qualquer um na rede vê a imagem ao vivo",
+                            "exija senha no stream RTSP da câmera e confirme que "
+                            "a porta não está redirecionada para a internet",
+                        )
+                    )
+                    continue
+            # Uma câmera com RTSP é o funcionamento normal dela; o problema é
+            # o serviço estar acessível, então o texto já diz isso.
+            out.append(
+                Finding(severity, h["ip"], f"{_label(h)}: {text}",
+                        fix.format(ip=h["ip"]))
+            )
         # Credencial padrão de fábrica: só um alerta, nunca um teste de login.
         cred = _default_cred_match(h)
         if cred:
