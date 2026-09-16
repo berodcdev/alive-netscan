@@ -116,6 +116,13 @@ def _label(host: dict) -> str:
     return f"{host['ip']} ({name})" if name else host["ip"]
 
 
+def _is_camera(host: dict) -> bool:
+    """True se o aparelho é uma câmera/DVR — por tipo classificado ou por serviço."""
+    label = host["device"].label if host.get("device") else ""
+    services = host.get("services") or set()
+    return label == "CAMERA" or bool(services & {"rtsp", "dvr"})
+
+
 def _host_text(host: dict) -> str:
     """Tudo que identifica o aparelho, junto e em minúsculas, para casar marcas."""
     banners = host.get("banners") or {}
@@ -317,17 +324,38 @@ def collect(
             )
 
     # Redirecionamentos de porta ativos no roteador: exposição para a internet.
+    # Cruzar o destino com o tipo do aparelho transforma "porta X aberta" em
+    # "sua câmera está acessível de fora" — o achado mais acionável que existe.
+    by_ip = {h["ip"]: h for h in hosts}
     for m in (wan or {}).get("port_mappings") or []:
+        client = m.get("internal_client")
         desc = f" [{m['description']}]" if m.get("description") else ""
-        out.append(
-            Finding(
-                "alto", m.get("internal_client"),
-                f"roteador redireciona {m.get('protocol')}/{m.get('external_port')} "
-                f"da internet para {m.get('internal_client')}:{m.get('internal_port')}"
-                f"{desc}",
-                "remova o redirecionamento no painel do roteador se não for proposital",
+        proto_port = f"{m.get('protocol')}/{m.get('external_port')}"
+        alvo = by_ip.get(client)
+        if alvo is not None and _is_camera(alvo):
+            out.append(
+                Finding(
+                    "alto", client,
+                    f"câmera em {_label(alvo)} exposta à internet: o roteador abre "
+                    f"{proto_port} para {client}:{m.get('internal_port')}{desc} — a "
+                    "imagem pode estar acessível de fora da sua rede",
+                    "feche esse redirecionamento no roteador; para ver a câmera de "
+                    "fora, prefira uma VPN a expor a porta",
+                )
             )
-        )
+        else:
+            tipo = (
+                f" ({alvo['device'].label.lower()})"
+                if alvo is not None and alvo.get("device") else ""
+            )
+            out.append(
+                Finding(
+                    "alto", client,
+                    f"roteador redireciona {proto_port} da internet para "
+                    f"{client}{tipo}:{m.get('internal_port')}{desc}",
+                    "remova o redirecionamento no painel do roteador se não for proposital",
+                )
+            )
 
     # SNMP com community "public" respondendo: o default de fábrica, leitura
     # aberta da configuração do aparelho para qualquer um na LAN.

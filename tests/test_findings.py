@@ -370,3 +370,59 @@ class TestCredencialPadrao:
         h = self._h("192.168.0.50", vendor="Dahua", services={"http", "rtsp"},
                     device=classify.CAMERA)
         assert len(self._cred(findings.collect([h]))) == 1
+
+
+class TestCameraExposta:
+    """Cruzamento redirecionamento-de-porta x tipo: câmera aberta pra internet."""
+
+    def _cam(self, ip="192.168.0.50", **k):
+        from alive import classify
+        h = host(ip, device=classify.CAMERA)
+        h["services"] = {"rtsp", "http"}
+        h.update(k)
+        return h
+
+    def _wan(self, client, ext="8554", inport="554"):
+        return {"port_mappings": [{"protocol": "TCP", "external_port": ext,
+                "internal_client": client, "internal_port": inport}]}
+
+    def test_camera_exposta_tem_mensagem_propria(self):
+        cam = self._cam()
+        (f,) = [x for x in findings.collect([cam], wan=self._wan("192.168.0.50"))
+                if "internet" in x.message]
+        assert f.severity == "alto"
+        assert "câmera" in f.message.lower()
+        assert "VPN" in f.fix or "vpn" in f.fix
+
+    def test_camera_por_servico_rtsp_mesmo_sem_tipo(self):
+        from alive import classify
+        h = host("192.168.0.51", device=classify.UNKNOWN)
+        h["services"] = {"rtsp"}
+        (f,) = [x for x in findings.collect([h], wan=self._wan("192.168.0.51"))
+                if "câmera" in x.message.lower()]
+        assert f.severity == "alto"
+
+    def test_host_comum_exposto_mostra_o_tipo(self):
+        from alive import classify
+        pc = host("192.168.0.30", device=classify.COMPUTER)
+        pc["services"] = {"ssh"}
+        (f,) = [x for x in findings.collect([pc], wan=self._wan("192.168.0.30", "2222", "22"))
+                if "redireciona" in x.message]
+        assert "computador" in f.message
+
+    def test_destino_desconhecido_nao_quebra(self):
+        wan = self._wan("192.168.0.99")
+        (f,) = [x for x in findings.collect([], wan=wan) if "redireciona" in x.message]
+        assert f.severity == "alto" and "192.168.0.99" in f.message
+
+    def test_sem_redirecionamento_nenhum_achado_de_exposicao(self):
+        cam = self._cam()
+        assert [x for x in findings.collect([cam]) if "internet" in x.message] == []
+
+    def test_is_camera_helper(self):
+        from alive import classify
+        assert findings._is_camera(host("1.1.1.1", device=classify.CAMERA)) is True
+        h = host("1.1.1.1", device=classify.UNKNOWN)
+        h["services"] = {"dvr"}
+        assert findings._is_camera(h) is True
+        assert findings._is_camera(host("1.1.1.1", device=classify.COMPUTER)) is False

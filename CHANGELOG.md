@@ -3,6 +3,22 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/);
 versionamento [SemVer](https://semver.org/lang/pt-BR/).
 
+## [0.12.0] — 2026-09-15
+
+### Adicionado
+- **Câmera exposta à internet** (fase 2 da auditoria de câmeras). O `alive` já
+  lia os redirecionamentos de porta ativos no roteador e já sabia quais hosts
+  são câmera; agora cruza os dois. Quando um redirecionamento aponta para uma
+  câmera/DVR, o achado deixa de ser "porta X aberta" e passa a dizer que a
+  imagem pode estar acessível de fora da rede, com a orientação de usar VPN em
+  vez de expor a porta. Nenhuma sonda nova, nenhum acesso ao vídeo — só o
+  cruzamento de dados que já tínhamos.
+
+### Alterado
+- O achado de redirecionamento de porta agora nomeia o tipo do aparelho de
+  destino (ex.: `... para 192.168.0.30 (computador):22`), deixando claro o que
+  está exposto.
+
 ## [0.11.0] — 2026-09-15
 
 ### Adicionado
