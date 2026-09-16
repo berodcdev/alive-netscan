@@ -327,3 +327,13 @@ class TestFlagOnvif:
         b = cli.build_parser().parse_args(["--fast"])
         cli._apply_fast(b)
         assert a.no_onvif is True and b.no_onvif is True
+
+
+class TestFlagCameras:
+    def test_flag_cameras_existe(self):
+        from alive import cli
+        assert cli.build_parser().parse_args(["--cameras"]).cameras is True
+
+    def test_cameras_padrao_desligado(self):
+        from alive import cli
+        assert cli.build_parser().parse_args([]).cameras is False

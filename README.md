@@ -100,6 +100,7 @@ Para automação, pipeline e monitoramento:
 alive -o targets | nmap -iL -   # só os IPs, para alimentar outra ferramenta
 alive -o csv > rede.csv         # uma linha por host, para planilha
 alive --with-service smb        # só hosts que expõem SMB (combina com -o)
+alive --cameras                 # foco em câmeras: exposição de cada uma
 alive --watch --json            # NDJSON: uma linha por ciclo, com os eventos
 alive --fail-on alto            # sai com código 3 se houver achado grave (cron/CI)
 alive -n 10.0.0.0/16 --force    # redes acima de /20 exigem --force

@@ -212,6 +212,11 @@ def build_parser() -> argparse.ArgumentParser:
              "[dim](ex.: smb,http,rtsp)[/dim].",
     )
     saida.add_argument(
+        "--cameras", action="store_true",
+        help="foco em câmeras: só as câmeras, com a exposição de cada uma "
+             "[dim](stream sem senha, aberta na internet...)[/dim].",
+    )
+    saida.add_argument(
         "--sort", choices=("ip", "name", "type", "risk"), default="ip",
         help="ordenar por: ip, name, type ou risk [dim](risk = achado mais grave "
              "primeiro; padrão: ip)[/dim].",
@@ -448,7 +453,9 @@ def run(args: argparse.Namespace) -> int:
 
     wanted = _wanted_services(getattr(args, "with_service", None))
     hosts = _filter_by_service(hosts, wanted)
-    if wanted:
+    if getattr(args, "cameras", False):
+        hosts = [h for h in hosts if findings._is_camera(h)]
+    if wanted or getattr(args, "cameras", False):
         ips = {h["ip"] for h in hosts}
         found = [f for f in found if f.ip is None or f.ip in ips]
 
@@ -458,6 +465,12 @@ def run(args: argparse.Namespace) -> int:
         print(render.to_targets(hosts))
     elif out_fmt == "csv":
         print(render.to_csv(hosts))
+    elif getattr(args, "cameras", False):
+        # Visão dedicada: contexto de rede + bloco de câmeras + rodapé.
+        render.print_summary(netinfo, hosts, method=method, diff=diff,
+                             findings=found, passive=args.passive)
+        render.print_cameras(hosts, netinfo, found)
+        render.print_footer(duracao, max(1, network.num_addresses - 2), hosts)
     else:
         render.print_summary(netinfo, hosts, method=method, diff=diff,
                              findings=found, passive=args.passive)

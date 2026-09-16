@@ -3,6 +3,17 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/);
 versionamento [SemVer](https://semver.org/lang/pt-BR/).
 
+## [0.14.0] — 2026-09-15
+
+### Adicionado
+- **Visão dedicada de câmeras** (`--cameras`, fase 3 da auditoria de câmeras).
+  Recorta a saída para as câmeras e mostra, uma por uma, a exposição de cada
+  uma num relance: stream RTSP aberto sem senha, exposta à internet, modelo com
+  login de fábrica, responde ONVIF, painel web na rede — mais os achados
+  ancorados naquela câmera. Combina com `-o json/csv/targets` (aí só filtra para
+  as câmeras). É a diferença entre "existe uma câmera" e "esta câmera está
+  transmitindo sem senha, resolve hoje".
+
 ## [0.13.0] — 2026-09-15
 
 ### Adicionado

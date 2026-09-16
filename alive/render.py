@@ -569,6 +569,63 @@ def to_json(
     return json.dumps(payload, ensure_ascii=False, indent=indent)
 
 
+def _camera_exposure(cam: dict, exposed_ips: set) -> list[str]:
+    """Linhas de exposição de uma câmera, com cor por gravidade."""
+    from . import findings
+
+    linhas: list[str] = []
+    auth = (cam.get("banners") or {}).get("rtsp_auth")
+    if auth == "open":
+        linhas.append("[bright_red]stream RTSP aberto SEM SENHA[/bright_red]")
+    elif auth == "required":
+        linhas.append("[green]stream RTSP exige senha[/green]")
+    elif "rtsp" in (cam.get("services") or set()):
+        linhas.append("[yellow]stream RTSP aberto (senha não confirmada)[/yellow]")
+
+    if cam["ip"] in exposed_ips:
+        linhas.append("[bright_red]exposta à internet (redirecionamento no roteador)[/bright_red]")
+
+    if findings._default_cred_match(cam):
+        linhas.append("[yellow]modelo com login de fábrica conhecido[/yellow]")
+
+    if cam.get("onvif"):
+        linhas.append("[dim]responde ONVIF[/dim]")
+    if (cam.get("services") or set()) & {"http", "https"}:
+        linhas.append("[dim]painel web na rede[/dim]")
+    return linhas
+
+
+def print_cameras(cameras: list[dict], net: "NetInfo", items: Optional[list]) -> None:
+    """Bloco dedicado de câmeras: cada uma com sua exposição e seus achados."""
+    console.print("[bold magenta][cam] câmeras[/bold magenta]")
+    if not cameras:
+        console.print("  [dim]nenhuma câmera detectada nesta rede[/dim]\n")
+        return
+    exposed_ips = {
+        m.get("internal_client")
+        for m in (getattr(net, "wan", {}) or {}).get("port_mappings") or []
+    }
+    por_ip: dict = {}
+    for f in items or []:
+        if f.ip:
+            por_ip.setdefault(f.ip, []).append(f)
+
+    for cam in cameras:
+        clean = clean_hostname(cam.get("name"))
+        nome = f" [white]{escape(clean)}[/white]" if clean else ""
+        modelo = f" [dim]{escape(cam['model'])}[/dim]" if cam.get("model") else ""
+        console.print(f"  [magenta]▪[/magenta] [bold]{cam['ip']}[/bold]{nome}{modelo}")
+        for linha in _camera_exposure(cam, exposed_ips):
+            console.print(f"      {linha}")
+        for f in por_ip.get(cam["ip"], []):
+            mark, rotulo = _SEV_MARK.get(f.severity, ("[!]", f.severity.upper()))
+            _print_hanging(
+                Text.from_markup(f"      [{f.color}]{mark} {rotulo:<5}[/{f.color}] "),
+                Text.from_markup(escape(f.message.split(': ', 1)[-1])),
+            )
+    console.print()
+
+
 def to_targets(hosts: list[dict]) -> str:
     """Só os IPs, um por linha — para alimentar nmap, masscan, um for no shell."""
     return "\n".join(h["ip"] for h in hosts)

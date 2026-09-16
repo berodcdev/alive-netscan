@@ -396,3 +396,50 @@ class TestSaidaArmada:
         h = host("192.168.0.9", mac=None, name=None, vendor=None, rtt=None)
         campos = render.to_csv([h]).splitlines()[1].split(",")
         assert campos[1] == "" and campos[7] == ""  # mac e rtt vazios
+
+
+class TestVisaoCameras:
+    def _cam(self, ip="192.168.0.50", **k):
+        h = host(ip, device=classify.CAMERA)
+        h.update({"services": {"rtsp", "http"}, "vendor": "Dahua",
+                  "model": "IPC-HDW1230", "name": "cam-garagem",
+                  "banners": {}, "onvif": {}})
+        h.update(k)
+        return h
+
+    def _net(self, exposed=None):
+        n = NetInfo(interface="wlan0", ip="192.168.0.9", network=None,
+                    gateway="192.168.0.1", ssid=None)
+        if exposed:
+            n.wan = {"port_mappings": [{"internal_client": exposed,
+                     "external_port": "8554", "internal_port": "554", "protocol": "TCP"}]}
+        return n
+
+    def test_rtsp_aberto_sem_senha(self, captura):
+        cam = self._cam(banners={"rtsp_auth": "open"})
+        render.print_cameras([cam], self._net(), [])
+        assert "SEM SENHA" in captura.getvalue()
+
+    def test_rtsp_com_senha_e_verde(self, captura):
+        cam = self._cam(banners={"rtsp_auth": "required"})
+        render.print_cameras([cam], self._net(), [])
+        assert "exige senha" in captura.getvalue()
+
+    def test_exposta_na_internet(self, captura):
+        cam = self._cam()
+        render.print_cameras([cam], self._net(exposed="192.168.0.50"), [])
+        assert "exposta à internet" in captura.getvalue()
+
+    def test_login_de_fabrica(self, captura):
+        cam = self._cam()
+        render.print_cameras([cam], self._net(), [])
+        assert "login de fábrica" in captura.getvalue()
+
+    def test_sem_cameras(self, captura):
+        render.print_cameras([], self._net(), [])
+        assert "nenhuma câmera" in captura.getvalue()
+
+    def test_mostra_ip_e_modelo(self, captura):
+        render.print_cameras([self._cam()], self._net(), [])
+        saida = captura.getvalue()
+        assert "192.168.0.50" in saida and "IPC-HDW1230" in saida
