@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 import re
 import time
@@ -564,6 +566,37 @@ def to_json(
         ],
     })
     return json.dumps(payload, ensure_ascii=False, indent=indent)
+
+
+def to_targets(hosts: list[dict]) -> str:
+    """Só os IPs, um por linha — para alimentar nmap, masscan, um for no shell."""
+    return "\n".join(h["ip"] for h in hosts)
+
+
+_CSV_COLUNAS = (
+    "ip", "mac", "name", "vendor", "type", "os_family",
+    "services", "rtt_ms", "discovered_via",
+)
+
+
+def to_csv(hosts: list[dict]) -> str:
+    """Uma linha por host, colunas estáveis — para planilha ou pipeline."""
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(_CSV_COLUNAS)
+    for h in hosts:
+        writer.writerow([
+            h["ip"],
+            h.get("mac") or "",
+            clean_hostname(h.get("name")) or "",
+            h.get("vendor") or "",
+            h["device"].label if h.get("device") else "",
+            h.get("os_family") or "",
+            " ".join(sorted(h.get("services") or [])),
+            h.get("rtt") if h.get("rtt") is not None else "",
+            h.get("via") or "",
+        ])
+    return buf.getvalue().rstrip("\n")
 
 
 def watch_line(

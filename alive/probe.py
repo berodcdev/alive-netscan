@@ -10,6 +10,7 @@ Tudo aqui é best-effort e com deadline: nenhuma sonda pode travar o scan.
 from __future__ import annotations
 
 import html
+import random
 import re
 import socket
 import struct
@@ -69,14 +70,23 @@ def probe_ports(
     timeout: float = 0.6,
     workers: int = 192,
     progress: Optional[Callable[[], None]] = None,
+    jitter: float = 0.0,
+    shuffle: bool = False,
 ) -> dict[str, set[str]]:
-    """Testa um punhado de portas por host. Retorna {ip: {serviço, ...}}."""
+    """Testa um punhado de portas por host. Retorna {ip: {serviço, ...}}.
+
+    ``shuffle``/``jitter`` (modo stealth) embaralham a ordem dos pares (ip,
+    porta) e atrasam cada conexão, dissolvendo a rajada de SYNs que denuncia
+    uma varredura de portas.
+    """
     if not ips:
         return {}
     found: dict[str, set[str]] = {}
     lock = threading.Lock()
 
     def check(pair: tuple[str, int]) -> None:
+        if jitter > 0:
+            time.sleep(random.uniform(0, jitter))
         ip, port = pair
         if _port_open(ip, port, timeout):
             with lock:
@@ -85,6 +95,8 @@ def probe_ports(
             progress()
 
     pairs = [(ip, p) for ip in ips for p in ports]
+    if shuffle:
+        random.shuffle(pairs)
     with ThreadPoolExecutor(max_workers=max(1, min(workers, len(pairs)))) as pool:
         list(pool.map(check, pairs))
     return found

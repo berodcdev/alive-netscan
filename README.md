@@ -74,22 +74,27 @@ alive -i wlan0             # força uma interface
 alive --watch              # monitora e avisa quem entra e sai (a cada 30s)
 alive --watch 60           # monitorando a cada 60 segundos
 alive --passive            # não manda pacote nenhum: só o cache ARP + mDNS
+alive --stealth            # furtivo: ordem aleatória, jitter, poucos workers
 alive --sort type          # agrupa por tipo, infraestrutura primeiro
+alive --sort risk          # host com o achado mais grave primeiro
 alive --json > recon.json  # saída em JSON para automação
 ```
 
-Para automação e monitoramento:
+Para automação, pipeline e monitoramento:
 
 ```bash
-alive --watch --json          # NDJSON: uma linha por ciclo, com os eventos
-alive --fail-on alto          # sai com código 3 se houver achado grave (cron/CI)
-alive -n 10.0.0.0/16 --force  # redes acima de /20 exigem --force
+alive -o targets | nmap -iL -   # só os IPs, para alimentar outra ferramenta
+alive -o csv > rede.csv         # uma linha por host, para planilha
+alive --with-service smb        # só hosts que expõem SMB (combina com -o)
+alive --watch --json            # NDJSON: uma linha por ciclo, com os eventos
+alive --fail-on alto            # sai com código 3 se houver achado grave (cron/CI)
+alive -n 10.0.0.0/16 --force    # redes acima de /20 exigem --force
 ```
 
 > 💡 Veja a saída sem escanear nada: **`alive --demo`** (é o que aparece no GIF acima).
 
 Cada sonda pode ser desligada: `--no-nmap`, `--no-mdns`, `--no-vendor`, `--no-ports`,
-`--no-upnp`, `--no-netbios`, `--no-history`.
+`--no-upnp`, `--no-netbios`, `--no-snmp`, `--no-dhcp`, `--no-history`.
 
 **`--passive`** desliga todas de uma vez: nenhum pacote sai daqui para os hosts. Sobram
 a tabela ARP que o sistema já mantém e a escuta de mDNS (multicast, o tráfego que a rede

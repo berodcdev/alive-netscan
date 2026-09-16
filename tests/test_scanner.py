@@ -174,3 +174,33 @@ def test_scan_marca_estado_arp(monkeypatch, linux_neigh):
     assert hosts["192.168.0.4"]["via"] == "arp"
     assert hosts["192.168.0.4"]["arp_state"] == "stale"
     assert hosts["192.168.0.1"]["arp_state"] == "confirmado"
+
+
+class TestPingSweepStealth:
+    """Modo stealth: ordem embaralhada e jitter, sem perder cobertura."""
+
+    def test_todos_os_hosts_sao_sondados_mesmo_embaralhado(self, monkeypatch):
+        vistos = []
+        monkeypatch.setattr(scanner, "_ping_one",
+                            lambda ip, t: vistos.append(ip) or {"ttl": 64})
+        net = ipaddress.ip_network("192.168.0.0/28")  # .1 a .14
+        alive = scanner.ping_sweep(net, workers=4, shuffle=True)
+        assert set(alive) == {str(h) for h in net.hosts()}
+        assert len(vistos) == 14
+
+    def test_jitter_adiciona_atraso(self, monkeypatch):
+        import time
+        monkeypatch.setattr(scanner, "_ping_one", lambda ip, t: None)
+        net = ipaddress.ip_network("192.168.0.0/29")  # 6 hosts
+        t0 = time.monotonic()
+        scanner.ping_sweep(net, workers=1, jitter=0.05)
+        # 6 hosts x até 0.05s de jitter, 1 worker: soma perceptível (> 0.05s).
+        assert time.monotonic() - t0 > 0.05
+
+    def test_sem_jitter_nem_shuffle_e_o_padrao(self, monkeypatch):
+        ordem = []
+        monkeypatch.setattr(scanner, "_ping_one",
+                            lambda ip, t: ordem.append(ip) or None)
+        net = ipaddress.ip_network("192.168.0.0/29")
+        scanner.ping_sweep(net, workers=1)
+        assert ordem == [str(h) for h in net.hosts()]  # ordem preservada

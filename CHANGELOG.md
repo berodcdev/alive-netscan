@@ -3,6 +3,24 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/);
 versionamento [SemVer](https://semver.org/lang/pt-BR/).
 
+## [0.9.0] — 2026-09-15
+
+### Adicionado
+- **Modo furtivo (`--stealth`)**: ordem de alvos aleatória, atraso (jitter)
+  sorteado antes de cada pacote e poucos workers em paralelo. Dissolve a rajada
+  sequencial de pings e SYNs que denuncia uma varredura a um IDS. Custa tempo, em
+  troca de não deixar a assinatura óbvia. Vale para o ping sweep e o fingerprint
+  de portas.
+- **Saída armável** para encadear o `alive` com outras ferramentas:
+  - `-o/--output {table,json,targets,csv}`: `targets` imprime só os IPs, um por
+    linha (`alive -o targets | nmap -iL -`); `csv` dá uma linha por host com
+    colunas estáveis, para planilha ou pipeline. `--json` continua valendo como
+    atalho de `-o json`.
+  - `--with-service SVC`: filtra a saída para os hosts que expõem os serviços
+    pedidos (ex.: `--with-service smb,http`), combinável com qualquer formato.
+  - `--sort risk`: ordena os hosts pelo achado mais grave de cada um, para
+    triar primeiro o que mais importa.
+
 ## [0.8.0] — 2026-09-15
 
 ### Adicionado

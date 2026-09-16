@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import ipaddress
 import platform
+import random
 import re
 import shutil
 import subprocess
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, Optional
 
@@ -101,12 +103,27 @@ def ping_sweep(
     timeout: float = 1.0,
     workers: int = 64,
     progress: Optional[Callable[[], None]] = None,
+    jitter: float = 0.0,
+    shuffle: bool = False,
 ) -> dict[str, dict]:
-    """Pinga todos os hosts da subrede em paralelo. Retorna {ip: {rtt, ttl}}."""
+    """Pinga todos os hosts da subrede em paralelo. Retorna {ip: {rtt, ttl}}.
+
+    ``shuffle`` embaralha a ordem dos alvos e ``jitter`` insere um atraso
+    aleatório antes de cada ping: juntos, quebram a assinatura de varredura
+    sequencial que um IDS reconhece (modo stealth).
+    """
     hosts = [str(h) for h in network.hosts()]
+    if shuffle:
+        random.shuffle(hosts)
+
+    def probe(ip: str) -> Optional[dict]:
+        if jitter > 0:
+            time.sleep(random.uniform(0, jitter))
+        return _ping_one(ip, timeout)
+
     alive: dict[str, dict] = {}
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-        futures = {pool.submit(_ping_one, ip, timeout): ip for ip in hosts}
+        futures = {pool.submit(probe, ip): ip for ip in hosts}
         for fut in as_completed(futures):
             res = fut.result()
             if res is not None:
@@ -236,11 +253,16 @@ def scan(
     progress: Optional[Callable[[], None]] = None,
     local_ip: Optional[str] = None,
     gateway: Optional[str] = None,
+    jitter: float = 0.0,
+    shuffle: bool = False,
 ) -> list[dict]:
     """Descobre hosts vivos e associa MACs. Retorna lista de {ip, mac, rtt, ttl, via}.
 
     Estratégia híbrida: usa nmap quando disponível e habilitado; sempre
     complementa com ping sweep + tabela ARP para máxima cobertura.
+
+    ``jitter``/``shuffle`` são o modo stealth: ordem aleatória e atraso entre
+    pings para não deixar a assinatura de uma varredura sequencial.
     """
     alive: dict[str, str] = {}  # ip -> como foi descoberto
     macs: dict[str, str] = {}
@@ -255,7 +277,10 @@ def scan(
     # Ping sweep (rápido, popula o ARP, cobre hosts que o nmap perdeu). Em modo
     # passivo não roda: nenhum pacote sai daqui para os hosts.
     if use_ping:
-        pinged = ping_sweep(network, timeout=timeout, workers=workers, progress=progress)
+        pinged = ping_sweep(
+            network, timeout=timeout, workers=workers, progress=progress,
+            jitter=jitter, shuffle=shuffle,
+        )
         for ip, info in pinged.items():
             alive[ip] = "ping"
             stats[ip] = info

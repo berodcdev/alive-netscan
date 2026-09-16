@@ -364,3 +364,35 @@ class TestResumoPassivo:
     def test_modo_normal_mantem_a_frase(self, captura):
         render.print_summary(self._net(), [host(via="arp")], method="ping + ARP")
         assert "ignoram ping" in captura.getvalue()
+
+
+class TestSaidaArmada:
+    """Formatos de máquina: targets (só IPs) e csv."""
+
+    def test_targets_um_ip_por_linha(self):
+        hosts = [host("192.168.0.1"), host("192.168.0.9"), host("192.168.0.20")]
+        assert render.to_targets(hosts) == "192.168.0.1\n192.168.0.9\n192.168.0.20"
+
+    def test_targets_vazio(self):
+        assert render.to_targets([]) == ""
+
+    def test_csv_tem_cabecalho_e_linha(self):
+        h = host("192.168.0.9", mac="aa:bb:cc:dd:ee:01", name="pc-sala.local",
+                 vendor="Dell", os_family="Windows", services={"smb", "rdp"},
+                 rtt=3.2, via="ping", device=classify.COMPUTER)
+        linhas = render.to_csv([h]).splitlines()
+        assert linhas[0] == "ip,mac,name,vendor,type,os_family,services,rtt_ms,discovered_via"
+        assert linhas[1].startswith("192.168.0.9,aa:bb:cc:dd:ee:01,pc-sala,Dell,COMPUTADOR,Windows,")
+        assert "rdp smb" in linhas[1]  # serviços ordenados
+
+    def test_csv_escapa_virgula_do_fabricante(self):
+        import csv as _csv
+        import io
+        h = host("192.168.0.9", vendor="Samsung Electronics Co.,Ltd")
+        linhas = list(_csv.reader(io.StringIO(render.to_csv([h]))))
+        assert linhas[1][3] == "Samsung Electronics Co.,Ltd"
+
+    def test_csv_campos_ausentes_viram_vazio(self):
+        h = host("192.168.0.9", mac=None, name=None, vendor=None, rtt=None)
+        campos = render.to_csv([h]).splitlines()[1].split(",")
+        assert campos[1] == "" and campos[7] == ""  # mac e rtt vazios

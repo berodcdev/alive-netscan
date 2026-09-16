@@ -233,3 +233,83 @@ class TestFlagsDhcp:
         args = cli.build_parser().parse_args(["--fast"])
         cli._apply_fast(args)
         assert args.no_dhcp is True
+
+
+class TestStealth:
+    def test_flag_stealth_liga_jitter_shuffle_e_limita_workers(self):
+        from alive import cli
+        args = cli.build_parser().parse_args(["--stealth"])
+        cli._apply_stealth(args)
+        assert args.jitter > 0 and args.shuffle is True
+        assert args.workers <= cli._STEALTH_WORKERS
+
+    def test_sem_stealth_sem_jitter(self):
+        from alive import cli
+        args = cli.build_parser().parse_args([])
+        cli._apply_stealth(args)
+        assert args.jitter == 0.0 and args.shuffle is False
+
+    def test_stealth_respeita_workers_menor(self):
+        from alive import cli
+        args = cli.build_parser().parse_args(["--stealth", "-w", "2"])
+        cli._apply_stealth(args)
+        assert args.workers == 2
+
+
+class TestSaidaFormato:
+    def test_output_padrao_table(self):
+        from alive import cli
+        assert cli._output_format(cli.build_parser().parse_args([])) == "table"
+
+    def test_json_e_atalho_para_output_json(self):
+        from alive import cli
+        assert cli._output_format(cli.build_parser().parse_args(["--json"])) == "json"
+
+    def test_output_targets(self):
+        from alive import cli
+        assert cli._output_format(cli.build_parser().parse_args(["-o", "targets"])) == "targets"
+
+    def test_json_vence_output(self):
+        from alive import cli
+        args = cli.build_parser().parse_args(["--json", "-o", "csv"])
+        assert cli._output_format(args) == "json"
+
+
+class TestFiltroServico:
+    def _h(self, ip, *svcs):
+        return {"ip": ip, "services": set(svcs)}
+
+    def test_filtra_por_servico(self):
+        from alive import cli
+        hosts = [self._h("192.168.0.1", "http"), self._h("192.168.0.2", "smb"),
+                 self._h("192.168.0.3", "http", "https")]
+        wanted = cli._wanted_services("http")
+        out = cli._filter_by_service(hosts, wanted)
+        assert [h["ip"] for h in out] == ["192.168.0.1", "192.168.0.3"]
+
+    def test_varios_servicos_separados_por_virgula(self):
+        from alive import cli
+        assert cli._wanted_services("smb, HTTP ,rtsp") == {"smb", "http", "rtsp"}
+
+    def test_sem_filtro_retorna_tudo(self):
+        from alive import cli
+        hosts = [self._h("192.168.0.1", "http")]
+        assert cli._filter_by_service(hosts, set()) == hosts
+
+
+class TestOrdenacaoPorRisco:
+    def test_host_com_achado_mais_grave_vem_primeiro(self):
+        from alive import cli, findings
+        hosts = [{"ip": "192.168.0.9"}, {"ip": "192.168.0.1"}, {"ip": "192.168.0.5"}]
+        found = [
+            findings.Finding("baixo", "192.168.0.9", "x"),
+            findings.Finding("alto", "192.168.0.5", "y"),
+        ]
+        ordem = [h["ip"] for h in cli._sort_by_risk(hosts, found)]
+        assert ordem == ["192.168.0.5", "192.168.0.9", "192.168.0.1"]
+
+    def test_sem_achados_cai_para_ordem_de_ip(self):
+        from alive import cli
+        hosts = [{"ip": "192.168.0.9"}, {"ip": "192.168.0.1"}]
+        assert [h["ip"] for h in cli._sort_by_risk(hosts, [])] == \
+            ["192.168.0.1", "192.168.0.9"]

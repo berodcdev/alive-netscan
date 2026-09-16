@@ -45,7 +45,12 @@ EPILOG = """\
   [green]alive --watch[/green]                  [dim]# monitora e avisa quem entra e sai[/dim]
   [green]alive --watch 60[/green]               [dim]# monitorando a cada 60 segundos[/dim]
   [green]alive --passive[/green]                [dim]# sem mandar pacote: só cache ARP + mDNS[/dim]
+  [green]alive --stealth[/green]                [dim]# furtivo: ordem aleatória e jitter[/dim]
   [green]alive --sort type[/green]              [dim]# agrupa por tipo de dispositivo[/dim]
+  [green]alive --sort risk[/green]              [dim]# host com achado mais grave primeiro[/dim]
+  [green]alive -o targets | nmap -iL -[/green]  [dim]# só os IPs, p/ outra ferramenta[/dim]
+  [green]alive -o csv > rede.csv[/green]        [dim]# planilha de todos os hosts[/dim]
+  [green]alive --with-service smb[/green]       [dim]# só quem expõe SMB[/dim]
   [green]alive --json > recon.json[/green]      [dim]# exporta o resultado em JSON[/dim]
   [green]alive --watch --json[/green]           [dim]# NDJSON: uma linha por ciclo[/dim]
   [green]alive --fail-on alto[/green]           [dim]# código 3 se houver achado grave[/dim]
@@ -129,6 +134,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="modo passivo: nenhum pacote para os hosts [dim](só tabela ARP + escuta mDNS)[/dim].",
     )
     veloc.add_argument(
+        "--stealth", action="store_true",
+        help="modo furtivo: ordem aleatória, atraso entre pacotes e poucos workers "
+             "[dim](mais lento, evita assinatura de varredura)[/dim].",
+    )
+    veloc.add_argument(
         "--no-nmap", action="store_true",
         help="não usar o nmap, mesmo instalado (força o ping sweep).",
     )
@@ -189,8 +199,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     saida = parser.add_argument_group("saída")
     saida.add_argument(
-        "--sort", choices=("ip", "name", "type"), default="ip",
-        help="como ordenar a tabela: ip, name ou type [dim](padrão: ip)[/dim].",
+        "-o", "--output", choices=("table", "json", "targets", "csv"), default="table",
+        help="formato de saída: table, json, targets (só IPs) ou csv [dim](padrão: table)[/dim].",
+    )
+    saida.add_argument(
+        "--with-service", metavar="SVC",
+        help="só hosts com estes serviços abertos, separados por vírgula "
+             "[dim](ex.: smb,http,rtsp)[/dim].",
+    )
+    saida.add_argument(
+        "--sort", choices=("ip", "name", "type", "risk"), default="ip",
+        help="ordenar por: ip, name, type ou risk [dim](risk = achado mais grave "
+             "primeiro; padrão: ip)[/dim].",
     )
     saida.add_argument(
         "--fail-on", choices=("alto", "medio", "baixo"), default=None, metavar="NÍVEL",
@@ -304,12 +324,68 @@ def _apply_fast(args: argparse.Namespace) -> None:
     args.no_dhcp = True
 
 
+# Parâmetros de furtividade que as sondas recebem. Ficam em ``args`` para o
+# _collect repassar a scanner.scan e probe.probe_ports.
+_STEALTH_JITTER = 0.3     # atraso máximo (s) sorteado antes de cada pacote
+_STEALTH_WORKERS = 8      # poucos em paralelo: menos rajada simultânea
+
+
+def _apply_stealth(args: argparse.Namespace) -> None:
+    """--stealth: ordem aleatória, atraso entre pacotes e poucos workers.
+
+    O objetivo é não deixar a assinatura óbvia de uma varredura — a rajada
+    sequencial de pings e SYNs que um IDS reconhece na hora. Custa tempo.
+    """
+    args.jitter = 0.0
+    args.shuffle = False
+    if not getattr(args, "stealth", False):
+        return
+    args.jitter = _STEALTH_JITTER
+    args.shuffle = True
+    # Respeita um valor menor que o usuário tenha pedido; limita um alto.
+    args.workers = min(args.workers, _STEALTH_WORKERS)
+
+
+def _output_format(args: argparse.Namespace) -> str:
+    """--json é atalho para -o json; senão vale o que veio em --output."""
+    if getattr(args, "json", False):
+        return "json"
+    return getattr(args, "output", "table")
+
+
+def _wanted_services(spec: Optional[str]) -> set[str]:
+    return {s.strip().lower() for s in (spec or "").split(",") if s.strip()}
+
+
+def _filter_by_service(hosts: list[dict], wanted: set[str]) -> list[dict]:
+    """Mantém só hosts que expõem pelo menos um dos serviços pedidos."""
+    if not wanted:
+        return hosts
+    return [h for h in hosts if {s.lower() for s in (h.get("services") or set())} & wanted]
+
+
+def _sort_by_risk(hosts: list[dict], found: list) -> list[dict]:
+    """Ordena os hosts pelo achado mais grave de cada um (mais grave primeiro)."""
+    worst: dict[str, int] = {}
+    for f in found or []:
+        if not f.ip:
+            continue
+        rank = findings.SEVERITY_ORDER.get(f.severity, 9)
+        if f.ip not in worst or rank < worst[f.ip]:
+            worst[f.ip] = rank
+    return sorted(
+        hosts,
+        key=lambda h: (worst.get(h["ip"], 9), ipaddress.ip_address(h["ip"])),
+    )
+
+
 def run(args: argparse.Namespace) -> int:
     if getattr(args, "demo", False):
         return _run_demo(args)
 
     _apply_fast(args)
     _apply_passive(args)
+    _apply_stealth(args)
 
     # 1) Descobrir a rede local.
     netinfo = net.discover()
@@ -343,11 +419,13 @@ def run(args: argparse.Namespace) -> int:
 
     use_nmap = (not args.no_nmap) and scanner.has_nmap()
     method = _method_label(args, use_nmap)
+    out_fmt = _output_format(args)
+    is_table = out_fmt == "table"
 
     if args.watch is not None:
         return _run_watch(args, netinfo, use_nmap=use_nmap, method=method, note=vpn_note)
 
-    if not args.json:
+    if is_table:
         render.print_banner()
         if vpn_note:
             render.warn(vpn_note)
@@ -357,11 +435,23 @@ def run(args: argparse.Namespace) -> int:
         )
 
     inicio = time.monotonic()
-    hosts, diff, found = _collect(args, netinfo, use_nmap=use_nmap, quiet=args.json)
+    # Formatos de máquina (json/targets/csv) não podem ter spinner nem barra
+    # sujando o stdout — coletam em modo silencioso.
+    hosts, diff, found = _collect(args, netinfo, use_nmap=use_nmap, quiet=not is_table)
     duracao = time.monotonic() - inicio
 
-    if args.json:
+    wanted = _wanted_services(getattr(args, "with_service", None))
+    hosts = _filter_by_service(hosts, wanted)
+    if wanted:
+        ips = {h["ip"] for h in hosts}
+        found = [f for f in found if f.ip is None or f.ip in ips]
+
+    if out_fmt == "json":
         print(render.to_json(hosts, netinfo, found))
+    elif out_fmt == "targets":
+        print(render.to_targets(hosts))
+    elif out_fmt == "csv":
+        print(render.to_csv(hosts))
     else:
         render.print_summary(netinfo, hosts, method=method, diff=diff,
                              findings=found, passive=args.passive)
@@ -408,6 +498,8 @@ def _collect(
         "use_nmap": use_nmap, "use_ping": not getattr(args, "passive", False),
         "timeout": args.timeout, "workers": args.workers,
         "local_ip": netinfo.ip, "gateway": netinfo.gateway,
+        "jitter": getattr(args, "jitter", 0.0),
+        "shuffle": getattr(args, "shuffle", False),
     }
     if quiet:
         hosts_raw = scanner.scan(network, **scan_kwargs)
@@ -438,8 +530,14 @@ def _collect(
     )
 
     # 3) Sondas ativas — é o que resolve os hosts sem nome nem OUI.
+    port_workers = _STEALTH_WORKERS if getattr(args, "stealth", False) else 192
     ports = {} if args.no_ports else _staged(
-        args, quiet, "fingerprint de portas", lambda: probe.probe_ports(ips)
+        args, quiet, "fingerprint de portas",
+        lambda: probe.probe_ports(
+            ips, workers=port_workers,
+            jitter=getattr(args, "jitter", 0.0),
+            shuffle=getattr(args, "shuffle", False),
+        ),
     )
     upnp = {} if args.no_upnp else _staged(
         args, quiet, "sondando SSDP/UPnP", lambda: probe.discover_ssdp(args.upnp_time)
@@ -580,6 +678,9 @@ def _collect(
     )
     for h in hosts:
         h["notes"] = findings.short_notes(h)
+    # A ordenação por risco só é possível aqui: precisa dos achados prontos.
+    if args.sort == "risk":
+        hosts = _sort_by_risk(hosts, found)
     return hosts, diff, found
 
 
